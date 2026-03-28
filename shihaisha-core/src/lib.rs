@@ -1,8 +1,14 @@
+pub mod diff;
 pub mod error;
+pub mod graph;
+pub mod merge;
 pub mod traits;
 pub mod types;
 
+pub use diff::{Change, diff};
 pub use error::{Error, Result};
+pub use graph::{resolve_order, validate_references};
+pub use merge::Merge;
 pub use traits::config_translator::ConfigTranslator;
 pub use traits::health_checker::HealthChecker;
 pub use traits::init_backend::InitBackend;
