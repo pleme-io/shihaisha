@@ -9,6 +9,9 @@ pub mod launchd;
 #[cfg(feature = "native")]
 pub mod native;
 
+#[cfg(feature = "supervisord")]
+pub mod supervisord;
+
 pub mod health;
 pub mod translator;
 

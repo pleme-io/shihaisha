@@ -17,6 +17,7 @@ default = ["native"]
 systemd = []
 launchd = []
 native = []
+supervisord = []
 
 [dependencies]
 shihaisha-core = { workspace = true }

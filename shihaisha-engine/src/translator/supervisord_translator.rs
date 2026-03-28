@@ -1,0 +1,88 @@
+use shihaisha_core::traits::config_translator::ConfigTranslator;
+use shihaisha_core::types::service_spec::ServiceSpec;
+use shihaisha_core::Result;
+
+/// Supervisord `ConfigTranslator` implementation.
+///
+/// Translates `ServiceSpec` to supervisord INI `[program:name]` config format.
+pub struct SupervisordTranslator;
+
+impl ConfigTranslator for SupervisordTranslator {
+    fn translate(&self, spec: &ServiceSpec) -> Result<String> {
+        Ok(crate::supervisord::spec_to_conf(spec))
+    }
+
+    fn parse_native(&self, _content: &str) -> Result<ServiceSpec> {
+        Err(shihaisha_core::Error::ConfigError(
+            "parsing native supervisord configs is not yet implemented".to_owned(),
+        ))
+    }
+
+    fn extension(&self) -> &str {
+        "conf"
+    }
+
+    fn name(&self) -> &str {
+        "supervisord"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shihaisha_core::*;
+    use std::collections::HashMap;
+
+    fn minimal_spec() -> ServiceSpec {
+        ServiceSpec {
+            name: "test-svc".to_owned(),
+            description: "Test".to_owned(),
+            command: "/usr/bin/test".to_owned(),
+            args: vec![],
+            service_type: ServiceType::Simple,
+            working_directory: None,
+            user: None,
+            group: None,
+            environment: HashMap::new(),
+            restart: RestartPolicy::default(),
+            depends_on: DependencySpec::default(),
+            health: None,
+            sockets: vec![],
+            resources: None,
+            logging: LoggingSpec::default(),
+            notify: false,
+            watchdog_sec: 0,
+            timeout_start_sec: 90,
+            timeout_stop_sec: 90,
+            overrides: BackendOverrides::default(),
+        }
+    }
+
+    #[test]
+    fn translate_produces_program_section() {
+        let translator = SupervisordTranslator;
+        let result = translator.translate(&minimal_spec()).expect("translate");
+        assert!(result.contains("[program:test-svc]"));
+        assert!(result.contains("command=/usr/bin/test"));
+        assert!(result.contains("autostart=true"));
+    }
+
+    #[test]
+    fn extension_is_conf() {
+        let translator = SupervisordTranslator;
+        assert_eq!(translator.extension(), "conf");
+    }
+
+    #[test]
+    fn name_is_supervisord() {
+        let translator = SupervisordTranslator;
+        assert_eq!(translator.name(), "supervisord");
+    }
+
+    #[test]
+    fn parse_native_returns_error() {
+        let translator = SupervisordTranslator;
+        let result = translator.parse_native("[program:test]\ncommand=/bin/true");
+        assert!(result.is_err());
+    }
+}

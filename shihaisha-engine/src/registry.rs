@@ -34,6 +34,14 @@ impl BackendRegistry {
             }
         }
 
+        #[cfg(feature = "supervisord")]
+        {
+            let supervisord = crate::supervisord::SupervisordBackend::new();
+            if supervisord.available() {
+                backends.insert("supervisord".into(), Box::new(supervisord));
+            }
+        }
+
         #[cfg(feature = "native")]
         {
             let native = crate::native::NativeBackend::new();

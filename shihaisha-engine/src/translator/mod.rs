@@ -8,3 +8,6 @@ pub mod systemd_translator;
 
 #[cfg(feature = "launchd")]
 pub mod launchd_translator;
+
+#[cfg(feature = "supervisord")]
+pub mod supervisord_translator;
