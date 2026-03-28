@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use shihaisha_core::traits::config_translator::ConfigEmitter;
 use shihaisha_core::traits::init_backend::InitBackend;
 use shihaisha_core::{
     Error, HealthState, LogTarget, RestartStrategy, Result, ServiceSpec, ServiceState,
@@ -45,15 +46,20 @@ impl SystemdBackend {
         for arg in args {
             cmd.arg(arg);
         }
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| Error::BackendError(format!("systemctl failed: {e}")))?;
+        let output = cmd.output().await.map_err(|e| Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "systemctl".to_owned(),
+            detail: format!("failed to execute: {e}"),
+        })?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(Error::BackendError(format!("systemctl error: {stderr}")))
+            Err(Error::BackendError {
+                backend: "systemd".to_owned(),
+                operation: "systemctl".to_owned(),
+                detail: stderr.into_owned(),
+            })
         }
     }
 
@@ -65,6 +71,20 @@ impl SystemdBackend {
 impl Default for SystemdBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ConfigEmitter for SystemdBackend {
+    fn emit(&self, spec: &ServiceSpec) -> Result<String> {
+        Ok(spec_to_unit(spec))
+    }
+
+    fn extension(&self) -> &str {
+        "service"
+    }
+
+    fn name(&self) -> &str {
+        "systemd"
     }
 }
 
@@ -231,29 +251,45 @@ impl InitBackend for SystemdBackend {
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                Error::BackendError(format!("failed to create unit dir: {e}"))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::BackendError {
+                    backend: "systemd".to_owned(),
+                    operation: "install".to_owned(),
+                    detail: format!("failed to create unit dir: {e}"),
+                })?;
         }
 
-        tokio::fs::write(&path, unit_content).await.map_err(|e| {
-            Error::BackendError(format!("failed to write unit file: {e}"))
-        })?;
+        tokio::fs::write(&path, unit_content)
+            .await
+            .map_err(|e| Error::BackendError {
+                backend: "systemd".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to write unit file: {e}"),
+            })?;
 
         self.daemon_reload().await?;
         Ok(())
     }
 
     async fn uninstall(&self, name: &str) -> Result<()> {
-        // Stop and disable first, ignore errors
-        let _ = self.stop(name).await;
-        let _ = self.disable(name).await;
+        // Stop and disable first, continuing on errors
+        if let Err(e) = self.stop(name).await {
+            tracing::warn!(service = name, error = %e, "failed to stop during uninstall, continuing");
+        }
+        if let Err(e) = self.disable(name).await {
+            tracing::warn!(service = name, error = %e, "failed to disable during uninstall, continuing");
+        }
 
         let path = self.unit_path(name);
         if path.exists() {
-            tokio::fs::remove_file(&path).await.map_err(|e| {
-                Error::BackendError(format!("failed to remove unit file: {e}"))
-            })?;
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| Error::BackendError {
+                    backend: "systemd".to_owned(),
+                    operation: "uninstall".to_owned(),
+                    detail: format!("failed to remove unit file: {e}"),
+                })?;
         }
 
         self.daemon_reload().await?;
@@ -362,17 +398,22 @@ impl InitBackend for SystemdBackend {
             "--no-pager",
         ]);
 
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| Error::BackendError(format!("journalctl failed: {e}")))?;
+        let output = cmd.output().await.map_err(|e| Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "logs".to_owned(),
+            detail: format!("journalctl failed to execute: {e}"),
+        })?;
 
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
             Ok(text.lines().map(|l| l.to_owned()).collect())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(Error::BackendError(format!("journalctl error: {stderr}")))
+            Err(Error::BackendError {
+                backend: "systemd".to_owned(),
+                operation: "logs".to_owned(),
+                detail: format!("journalctl error: {stderr}"),
+            })
         }
     }
 
@@ -457,7 +498,7 @@ fn home_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shihaisha_core::ResourceLimits;
+    use shihaisha_core::{MemorySize, NiceValue, ResourceLimits, Weight};
 
     fn test_spec() -> ServiceSpec {
         let mut spec = ServiceSpec::new("test-svc", "/usr/bin/test-app");
@@ -554,13 +595,13 @@ mod tests {
     fn resource_limits_in_unit() {
         let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
-            memory_max: Some("512M".to_owned()),
-            memory_high: Some("384M".to_owned()),
-            cpu_weight: Some(500),
+            memory_max: Some(MemorySize::parse("512M").unwrap()),
+            memory_high: Some(MemorySize::parse("384M").unwrap()),
+            cpu_weight: Some(Weight::new(500).unwrap()),
             cpu_quota: Some("50%".to_owned()),
             tasks_max: Some(256),
-            io_weight: Some(100),
-            nice: Some(5),
+            io_weight: Some(Weight::new(100).unwrap()),
+            nice: Some(NiceValue::new(5).unwrap()),
         });
 
         let unit = spec_to_unit(&spec);

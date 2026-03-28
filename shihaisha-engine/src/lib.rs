@@ -14,6 +14,5 @@ pub mod native;
 pub mod supervisord;
 
 pub mod health;
-pub mod translator;
 
 pub use registry::BackendRegistry;

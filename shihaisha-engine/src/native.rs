@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use shihaisha_core::traits::config_translator::ConfigEmitter;
 use shihaisha_core::traits::init_backend::InitBackend;
 #[allow(unused_imports)]
 use shihaisha_core::{
@@ -85,14 +86,18 @@ impl NativeBackend {
             }
             LogTarget::File(path) => {
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::warn!(path = %parent.display(), error = %e, "failed to create stdout log dir, continuing");
+                    }
                 }
                 let file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map_err(|e| {
-                        Error::BackendError(format!("failed to open stdout log: {e}"))
+                    .map_err(|e| Error::BackendError {
+                        backend: "native".to_owned(),
+                        operation: "start".to_owned(),
+                        detail: format!("failed to open stdout log: {e}"),
                     })?;
                 cmd.stdout(file);
             }
@@ -107,14 +112,18 @@ impl NativeBackend {
             }
             LogTarget::File(path) => {
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::warn!(path = %parent.display(), error = %e, "failed to create stderr log dir, continuing");
+                    }
                 }
                 let file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map_err(|e| {
-                        Error::BackendError(format!("failed to open stderr log: {e}"))
+                    .map_err(|e| Error::BackendError {
+                        backend: "native".to_owned(),
+                        operation: "start".to_owned(),
+                        detail: format!("failed to open stderr log: {e}"),
                     })?;
                 cmd.stderr(file);
             }
@@ -123,9 +132,11 @@ impl NativeBackend {
             }
         }
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| Error::BackendError(format!("failed to spawn process: {e}")))?;
+        let child = cmd.spawn().map_err(|e| Error::BackendError {
+            backend: "native".to_owned(),
+            operation: "start".to_owned(),
+            detail: format!("failed to spawn process: {e}"),
+        })?;
 
         let pid = child.id();
 
@@ -227,13 +238,32 @@ impl Default for NativeBackend {
     }
 }
 
+impl ConfigEmitter for NativeBackend {
+    fn emit(&self, spec: &ServiceSpec) -> Result<String> {
+        serde_yaml_ng::to_string(spec)
+            .map_err(|e| Error::ConfigError(format!("failed to serialize spec: {e}")))
+    }
+
+    fn extension(&self) -> &str {
+        "yaml"
+    }
+
+    fn name(&self) -> &str {
+        "native"
+    }
+}
+
 #[async_trait]
 impl InitBackend for NativeBackend {
     async fn install(&self, spec: &ServiceSpec) -> Result<()> {
         // Write spec to YAML file
         tokio::fs::create_dir_all(&self.services_dir)
             .await
-            .map_err(|e| Error::BackendError(format!("failed to create services dir: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "native".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to create services dir: {e}"),
+            })?;
 
         let yaml = serde_yaml_ng::to_string(spec)
             .map_err(|e| Error::Serialization(format!("failed to serialize spec: {e}")))?;
@@ -241,7 +271,11 @@ impl InitBackend for NativeBackend {
         let path = self.spec_path(&spec.name);
         tokio::fs::write(&path, yaml)
             .await
-            .map_err(|e| Error::BackendError(format!("failed to write spec: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "native".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to write spec: {e}"),
+            })?;
 
         // Initialize state entry
         let mut state = self.state.write().await;
@@ -261,15 +295,21 @@ impl InitBackend for NativeBackend {
     }
 
     async fn uninstall(&self, name: &str) -> Result<()> {
-        // Stop if running
-        let _ = self.stop(name).await;
+        // Stop if running, continuing on errors
+        if let Err(e) = self.stop(name).await {
+            tracing::warn!(service = name, error = %e, "failed to stop during uninstall, continuing");
+        }
 
         // Remove spec file
         let path = self.spec_path(name);
         if path.exists() {
             tokio::fs::remove_file(&path)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to remove spec: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "uninstall".to_owned(),
+                    detail: format!("failed to remove spec: {e}"),
+                })?;
         }
 
         // Remove from state
@@ -333,7 +373,11 @@ impl InitBackend for NativeBackend {
                 .arg(pid.to_string())
                 .output()
                 .await
-                .map_err(|e| Error::BackendError(format!("kill failed: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "stop".to_owned(),
+                    detail: format!("kill failed: {e}"),
+                })?;
 
             if !output.status.success() {
                 // Process may have already exited; that's fine.
@@ -373,17 +417,25 @@ impl InitBackend for NativeBackend {
                 .args(["-HUP", &pid.to_string()])
                 .output()
                 .await
-                .map_err(|e| Error::BackendError(format!("kill -HUP failed: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "reload".to_owned(),
+                    detail: format!("kill -HUP failed: {e}"),
+                })?;
             if !output.status.success() {
-                return Err(Error::BackendError(format!(
-                    "failed to send SIGHUP to {name}"
-                )));
+                return Err(Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "reload".to_owned(),
+                    detail: format!("failed to send SIGHUP to {name}"),
+                });
             }
             Ok(())
         } else {
-            Err(Error::BackendError(format!(
-                "service {name} is not running, cannot reload"
-            )))
+            Err(Error::BackendError {
+                backend: "native".to_owned(),
+                operation: "reload".to_owned(),
+                detail: format!("service {name} is not running, cannot reload"),
+            })
         }
     }
 
@@ -437,7 +489,11 @@ impl InitBackend for NativeBackend {
                 if path.exists() {
                     let text = tokio::fs::read_to_string(path)
                         .await
-                        .map_err(|e| Error::BackendError(format!("failed to read log: {e}")))?;
+                        .map_err(|e| Error::BackendError {
+                            backend: "native".to_owned(),
+                            operation: "logs".to_owned(),
+                            detail: format!("failed to read log: {e}"),
+                        })?;
                     let all_lines: Vec<String> = text.lines().map(|l| l.to_owned()).collect();
                     let start = all_lines.len().saturating_sub(lines as usize);
                     return Ok(all_lines[start..].to_vec());
@@ -499,12 +555,19 @@ impl InitBackend for NativeBackend {
         if self.services_dir.exists() {
             let mut entries = tokio::fs::read_dir(&self.services_dir)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to read services dir: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "list".to_owned(),
+                    detail: format!("failed to read services dir: {e}"),
+                })?;
 
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|e| Error::BackendError(format!("failed to read dir entry: {e}")))?
+            while let Some(entry) = entries.next_entry().await.map_err(|e| {
+                Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "list".to_owned(),
+                    detail: format!("failed to read dir entry: {e}"),
+                }
+            })?
             {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "yaml") {
@@ -658,7 +721,8 @@ mod tests {
     #[tokio::test]
     async fn name_is_native() {
         let backend = NativeBackend::new();
-        assert_eq!(backend.name(), "native");
+        assert_eq!(InitBackend::name(&backend), "native");
+        assert_eq!(ConfigEmitter::name(&backend), "native");
     }
 
     #[tokio::test]
@@ -727,5 +791,118 @@ mod tests {
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "disk-only");
         assert_eq!(services[0].state, ServiceState::Inactive);
+    }
+
+    // Phase 5a: Restart behavior test
+    #[tokio::test]
+    async fn restart_on_failure_exhausts_retries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("fail-restart", "false");
+        spec.restart.strategy = RestartStrategy::OnFailure;
+        spec.restart.max_retries = 2;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("fail-restart").await.expect("start");
+
+        // Wait enough for the process to exit + 2 restart cycles (1s delay each) + margin
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let status = backend.status("fail-restart").await.expect("status");
+                    if status.state == ServiceState::Failed {
+                        return status;
+                    }
+                }
+            },
+        )
+        .await;
+
+        let status = result.expect("should reach Failed state within timeout");
+        assert_eq!(status.state, ServiceState::Failed);
+        // restart_count should be > 0 (attempted restarts before giving up)
+        assert!(
+            status.restart_count > 0,
+            "expected restart_count > 0, got {}",
+            status.restart_count
+        );
+
+        // Clean up
+        backend.uninstall("fail-restart").await.expect("uninstall");
+    }
+
+    // Phase 5b: Concurrent access test
+    #[tokio::test]
+    async fn concurrent_service_lifecycle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        // Install 3 services with long-running commands
+        let names = ["conc-a", "conc-b", "conc-c"];
+        for name in &names {
+            let mut spec = ServiceSpec::new(*name, "sleep");
+            spec.args = vec!["10".to_owned()];
+            spec.restart.strategy = RestartStrategy::Never;
+            spec.restart.delay_secs = 1;
+            backend.install(&spec).await.expect("install");
+        }
+
+        // Start all concurrently
+        let (ra, rb, rc) = tokio::join!(
+            backend.start("conc-a"),
+            backend.start("conc-b"),
+            backend.start("conc-c"),
+        );
+        ra.expect("start a");
+        rb.expect("start b");
+        rc.expect("start c");
+
+        // Brief pause for processes to spawn
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // All should be listed
+        let services = backend.list().await.expect("list");
+        assert_eq!(
+            services.len(),
+            3,
+            "expected 3 services, got {}",
+            services.len()
+        );
+
+        // Stop all concurrently
+        let (sa, sb, sc) = tokio::join!(
+            backend.stop("conc-a"),
+            backend.stop("conc-b"),
+            backend.stop("conc-c"),
+        );
+        sa.expect("stop a");
+        sb.expect("stop b");
+        sc.expect("stop c");
+
+        // Brief pause for state updates
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Verify all no longer running (they may be Stopped or Failed since
+        // SIGTERM causes a non-zero exit code which the watcher task sees as Failed)
+        for name in &names {
+            let status = backend.status(name).await.expect("status");
+            assert!(
+                matches!(
+                    status.state,
+                    ServiceState::Stopped | ServiceState::Inactive | ServiceState::Failed
+                ),
+                "service {name} should not be running, got {:?}",
+                status.state
+            );
+        }
+
+        // Clean up
+        for name in &names {
+            backend.uninstall(name).await.expect("uninstall");
+        }
     }
 }

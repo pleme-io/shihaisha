@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use plist::Dictionary;
+use shihaisha_core::traits::config_translator::ConfigEmitter;
 use shihaisha_core::traits::init_backend::InitBackend;
 #[allow(unused_imports)]
 use shihaisha_core::{
@@ -58,16 +59,21 @@ impl LaunchdBackend {
         for arg in args {
             cmd.arg(arg);
         }
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| Error::BackendError(format!("launchctl failed: {e}")))?;
+        let output = cmd.output().await.map_err(|e| Error::BackendError {
+            backend: "launchd".to_owned(),
+            operation: "launchctl".to_owned(),
+            detail: format!("failed to execute: {e}"),
+        })?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // launchctl sometimes returns non-zero for benign reasons
-            Err(Error::BackendError(format!("launchctl error: {stderr}")))
+            Err(Error::BackendError {
+                backend: "launchd".to_owned(),
+                operation: "launchctl".to_owned(),
+                detail: stderr.into_owned(),
+            })
         }
     }
 }
@@ -75,6 +81,21 @@ impl LaunchdBackend {
 impl Default for LaunchdBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ConfigEmitter for LaunchdBackend {
+    fn emit(&self, spec: &ServiceSpec) -> Result<String> {
+        let dict = spec_to_plist(spec);
+        dict_to_xml(&dict)
+    }
+
+    fn extension(&self) -> &str {
+        "plist"
+    }
+
+    fn name(&self) -> &str {
+        "launchd"
     }
 }
 
@@ -266,14 +287,21 @@ fn apply_logging(dict: &mut Dictionary, logging: &LoggingSpec, name: &str) {
 fn apply_resource_limits(dict: &mut Dictionary, res: &ResourceLimits) {
     // Nice value maps directly
     if let Some(nice) = res.nice {
-        dict.insert("Nice".to_owned(), plist::Value::Integer(nice.into()));
+        dict.insert(
+            "Nice".to_owned(),
+            plist::Value::Integer(i64::from(nice.value()).into()),
+        );
     }
+
+
+
 
     // ProcessType based on CPU weight heuristic
     if let Some(weight) = res.cpu_weight {
-        let process_type = if weight <= 100 {
+        let w = weight.value();
+        let process_type = if w <= 100 {
             "Background"
-        } else if weight >= 5000 {
+        } else if w >= 5000 {
             "Interactive"
         } else {
             "Standard"
@@ -289,21 +317,19 @@ fn apply_resource_limits(dict: &mut Dictionary, res: &ResourceLimits) {
     let mut hard_limits = Dictionary::new();
 
     if let Some(ref mem_max) = res.memory_max {
-        if let Some(bytes) = parse_memory_string(mem_max) {
-            hard_limits.insert(
-                "MemoryLock".to_owned(),
-                plist::Value::Integer(bytes.into()),
-            );
-        }
+        let bytes = mem_max.as_bytes() as i64;
+        hard_limits.insert(
+            "MemoryLock".to_owned(),
+            plist::Value::Integer(bytes.into()),
+        );
     }
 
     if let Some(ref mem_high) = res.memory_high {
-        if let Some(bytes) = parse_memory_string(mem_high) {
-            soft_limits.insert(
-                "MemoryLock".to_owned(),
-                plist::Value::Integer(bytes.into()),
-            );
-        }
+        let bytes = mem_high.as_bytes() as i64;
+        soft_limits.insert(
+            "MemoryLock".to_owned(),
+            plist::Value::Integer(bytes.into()),
+        );
     }
 
     if let Some(tasks_max) = res.tasks_max {
@@ -331,25 +357,6 @@ fn apply_resource_limits(dict: &mut Dictionary, res: &ResourceLimits) {
     }
 }
 
-/// Parse memory strings like "512M", "1G", "1024K" to bytes.
-fn parse_memory_string(s: &str) -> Option<i64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-
-    let (num_str, multiplier) = if let Some(n) = s.strip_suffix('G') {
-        (n, 1024 * 1024 * 1024_i64)
-    } else if let Some(n) = s.strip_suffix('M') {
-        (n, 1024 * 1024_i64)
-    } else if let Some(n) = s.strip_suffix('K') {
-        (n, 1024_i64)
-    } else {
-        (s, 1_i64)
-    };
-
-    num_str.trim().parse::<i64>().ok().map(|n| n * multiplier)
-}
 
 /// Convert a `serde_json::Value` to a `plist::Value`.
 fn json_value_to_plist(v: &serde_json::Value) -> Option<plist::Value> {
@@ -388,9 +395,16 @@ fn dict_to_xml(dict: &Dictionary) -> Result<String> {
     let mut buf = Vec::new();
     value
         .to_writer_xml(&mut buf)
-        .map_err(|e| Error::BackendError(format!("plist serialization failed: {e}")))?;
-    String::from_utf8(buf)
-        .map_err(|e| Error::BackendError(format!("plist UTF-8 conversion failed: {e}")))
+        .map_err(|e| Error::BackendError {
+            backend: "launchd".to_owned(),
+            operation: "serialize".to_owned(),
+            detail: format!("plist serialization: {e}"),
+        })?;
+    String::from_utf8(buf).map_err(|e| Error::BackendError {
+        backend: "launchd".to_owned(),
+        operation: "serialize".to_owned(),
+        detail: format!("plist UTF-8 conversion: {e}"),
+    })
 }
 
 /// Parse `launchctl print` output to extract service state.
@@ -429,25 +443,39 @@ impl InitBackend for LaunchdBackend {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to create plist dir: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "launchd".to_owned(),
+                    operation: "install".to_owned(),
+                    detail: format!("failed to create plist dir: {e}"),
+                })?;
         }
 
         tokio::fs::write(&path, xml)
             .await
-            .map_err(|e| Error::BackendError(format!("failed to write plist: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "launchd".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to write plist: {e}"),
+            })?;
 
         Ok(())
     }
 
     async fn uninstall(&self, name: &str) -> Result<()> {
-        // Try to stop first, ignore errors
-        let _ = self.stop(name).await;
+        // Try to stop first, continuing on errors
+        if let Err(e) = self.stop(name).await {
+            tracing::warn!(service = name, error = %e, "failed to stop during uninstall, continuing");
+        }
 
         let path = self.plist_path(name);
         if path.exists() {
             tokio::fs::remove_file(&path)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to remove plist: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "launchd".to_owned(),
+                    operation: "uninstall".to_owned(),
+                    detail: format!("failed to remove plist: {e}"),
+                })?;
         }
 
         Ok(())
@@ -469,7 +497,9 @@ impl InitBackend for LaunchdBackend {
 
     async fn restart(&self, name: &str) -> Result<()> {
         // launchd doesn't have a native restart; bootout then bootstrap
-        let _ = self.stop(name).await;
+        if let Err(e) = self.stop(name).await {
+            tracing::warn!(service = name, error = %e, "failed to stop during restart, continuing");
+        }
         self.start(name).await
     }
 
@@ -481,17 +511,25 @@ impl InitBackend for LaunchdBackend {
                 .args(["-HUP", &pid.to_string()])
                 .output()
                 .await
-                .map_err(|e| Error::BackendError(format!("kill -HUP failed: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "launchd".to_owned(),
+                    operation: "reload".to_owned(),
+                    detail: format!("kill -HUP failed: {e}"),
+                })?;
             if !output.status.success() {
-                return Err(Error::BackendError(
-                    "failed to send SIGHUP to service".to_owned(),
-                ));
+                return Err(Error::BackendError {
+                    backend: "launchd".to_owned(),
+                    operation: "reload".to_owned(),
+                    detail: "failed to send SIGHUP to service".to_owned(),
+                });
             }
             Ok(())
         } else {
-            Err(Error::BackendError(format!(
-                "service {name} is not running, cannot reload"
-            )))
+            Err(Error::BackendError {
+                backend: "launchd".to_owned(),
+                operation: "reload".to_owned(),
+                detail: format!("service {name} is not running, cannot reload"),
+            })
         }
     }
 
@@ -542,15 +580,23 @@ impl InitBackend for LaunchdBackend {
         if plist_path.exists() {
             let content = tokio::fs::read(&plist_path)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to read plist: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "launchd".to_owned(),
+                    operation: "logs".to_owned(),
+                    detail: format!("failed to read plist: {e}"),
+                })?;
             if let Ok(plist::Value::Dictionary(dict)) = plist::from_bytes::<plist::Value>(&content)
             {
                 if let Some(plist::Value::String(path)) = dict.get("StandardOutPath") {
                     let log_path = PathBuf::from(path);
                     if log_path.exists() {
-                        let text = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
-                            Error::BackendError(format!("failed to read log file: {e}"))
-                        })?;
+                        let text = tokio::fs::read_to_string(&log_path)
+                            .await
+                            .map_err(|e| Error::BackendError {
+                                backend: "launchd".to_owned(),
+                                operation: "logs".to_owned(),
+                                detail: format!("failed to read log file: {e}"),
+                            })?;
                         let all_lines: Vec<String> =
                             text.lines().map(|l| l.to_owned()).collect();
                         let start = all_lines.len().saturating_sub(lines as usize);
@@ -573,7 +619,11 @@ impl InitBackend for LaunchdBackend {
             ])
             .output()
             .await
-            .map_err(|e| Error::BackendError(format!("log show failed: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "launchd".to_owned(),
+                operation: "logs".to_owned(),
+                detail: format!("log show failed: {e}"),
+            })?;
 
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
@@ -802,15 +852,16 @@ mod tests {
 
     #[test]
     fn resource_limits_mapping() {
+        use shihaisha_core::types::resource_limits::{MemorySize, NiceValue, Weight};
         let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
-            memory_max: Some("1G".to_owned()),
-            memory_high: Some("768M".to_owned()),
-            cpu_weight: Some(100),
+            memory_max: Some(MemorySize::parse("1G").unwrap()),
+            memory_high: Some(MemorySize::parse("768M").unwrap()),
+            cpu_weight: Some(Weight::new(100).unwrap()),
             cpu_quota: None,
             tasks_max: Some(512),
             io_weight: None,
-            nice: Some(-5),
+            nice: Some(NiceValue::new(-5).unwrap()),
         });
 
         let dict = spec_to_plist(&spec);
@@ -846,11 +897,12 @@ mod tests {
 
     #[test]
     fn resource_limits_high_cpu_weight() {
+        use shihaisha_core::types::resource_limits::Weight;
         let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: None,
             memory_high: None,
-            cpu_weight: Some(5000),
+            cpu_weight: Some(Weight::new(5000).unwrap()),
             cpu_quota: None,
             tasks_max: None,
             io_weight: None,
@@ -907,16 +959,6 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert!(backend.available(), "launchd should be available on macOS");
         }
-    }
-
-    #[test]
-    fn parse_memory_string_various() {
-        assert_eq!(parse_memory_string("512M"), Some(512 * 1024 * 1024));
-        assert_eq!(parse_memory_string("1G"), Some(1024 * 1024 * 1024));
-        assert_eq!(parse_memory_string("2048K"), Some(2048 * 1024));
-        assert_eq!(parse_memory_string("1024"), Some(1024));
-        assert_eq!(parse_memory_string(""), None);
-        assert_eq!(parse_memory_string("abc"), None);
     }
 
     #[test]

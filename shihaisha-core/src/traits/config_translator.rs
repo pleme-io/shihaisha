@@ -1,20 +1,29 @@
 use crate::types::service_spec::ServiceSpec;
 use crate::Result;
 
-/// Translates canonical `ServiceSpec` to backend-native format and back.
+/// Translate a canonical `ServiceSpec` into a backend-native config format.
 ///
-/// Each backend implements this to generate its native config (systemd unit
-/// files, launchd plists, etc.) from the universal service specification.
-pub trait ConfigTranslator: Send + Sync {
-    /// Generate the native configuration (systemd unit, launchd plist, etc.).
-    fn translate(&self, spec: &ServiceSpec) -> Result<String>;
+/// Every backend that can generate native configuration (systemd unit files,
+/// launchd plists, supervisord INI sections, etc.) implements this trait.
+pub trait ConfigEmitter: Send + Sync {
+    /// Generate the native configuration string from a `ServiceSpec`.
+    fn emit(&self, spec: &ServiceSpec) -> Result<String>;
 
-    /// Parse a native configuration back into a `ServiceSpec` (best-effort).
-    fn parse_native(&self, content: &str) -> Result<ServiceSpec>;
-
-    /// File extension for the native format (e.g., `"service"`, `"plist"`).
+    /// File extension for the native format (e.g., `"service"`, `"plist"`, `"conf"`).
     fn extension(&self) -> &str;
 
-    /// Backend name.
+    /// Backend name (e.g., `"systemd"`, `"launchd"`, `"supervisord"`).
+    fn name(&self) -> &str;
+}
+
+/// Parse a backend-native config format back into a `ServiceSpec`.
+///
+/// This is an optional capability for backends that support importing
+/// existing native configurations. Not every backend needs to implement this.
+pub trait ConfigParser: Send + Sync {
+    /// Parse a native configuration string into a `ServiceSpec` (best-effort).
+    fn parse(&self, content: &str) -> Result<ServiceSpec>;
+
+    /// Backend name (e.g., `"systemd"`, `"launchd"`, `"supervisord"`).
     fn name(&self) -> &str;
 }

@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use shihaisha_core::traits::health_checker::HealthChecker;
-use shihaisha_core::types::health_check::HealthCheckSpec;
+use shihaisha_core::types::health_check::{HealthCheckResult, HealthCheckSpec};
 use shihaisha_core::Result;
 use std::path::Path;
+use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tracing::debug;
@@ -25,7 +26,9 @@ impl Default for DefaultHealthChecker {
 
 #[async_trait]
 impl HealthChecker for DefaultHealthChecker {
-    async fn check(&self, spec: &HealthCheckSpec) -> Result<bool> {
+    async fn check(&self, spec: &HealthCheckSpec) -> Result<HealthCheckResult> {
+        let start = Instant::now();
+
         match spec {
             HealthCheckSpec::Http {
                 endpoint,
@@ -36,32 +39,69 @@ impl HealthChecker for DefaultHealthChecker {
                 let timeout = std::time::Duration::from_secs(*timeout_secs);
                 // Simple HTTP check using a TCP connect to the endpoint
                 // (avoids pulling in reqwest as a dependency)
-                match tokio::time::timeout(timeout, check_http(endpoint)).await {
-                    Ok(Ok(healthy)) => Ok(healthy),
-                    Ok(Err(_)) | Err(_) => Ok(false),
-                }
+                let (healthy, message) =
+                    match tokio::time::timeout(timeout, check_http(endpoint)).await {
+                        Ok(Ok(true)) => (true, None),
+                        Ok(Ok(false)) => (false, Some("HTTP check returned non-2xx/3xx".to_owned())),
+                        Ok(Err(e)) => (false, Some(format!("HTTP check error: {e}"))),
+                        Err(_) => (false, Some("HTTP check timed out".to_owned())),
+                    };
+                Ok(HealthCheckResult {
+                    healthy,
+                    latency: start.elapsed(),
+                    message,
+                })
             }
             HealthCheckSpec::Tcp { address, .. } => {
                 debug!("TCP health check: {address}");
                 let timeout = std::time::Duration::from_secs(5);
-                match tokio::time::timeout(timeout, TcpStream::connect(address)).await {
-                    Ok(Ok(_)) => Ok(true),
-                    _ => Ok(false),
-                }
+                let (healthy, message) =
+                    match tokio::time::timeout(timeout, TcpStream::connect(address)).await {
+                        Ok(Ok(_)) => (true, None),
+                        Ok(Err(e)) => (false, Some(format!("TCP connect failed: {e}"))),
+                        Err(_) => (false, Some("TCP connect timed out".to_owned())),
+                    };
+                Ok(HealthCheckResult {
+                    healthy,
+                    latency: start.elapsed(),
+                    message,
+                })
             }
             HealthCheckSpec::Command {
                 command, args, ..
             } => {
                 debug!("command health check: {command}");
                 let output = Command::new(command).args(args).output().await;
-                match output {
-                    Ok(out) => Ok(out.status.success()),
-                    Err(_) => Ok(false),
-                }
+                let (healthy, message) = match output {
+                    Ok(out) if out.status.success() => (true, None),
+                    Ok(out) => (
+                        false,
+                        Some(format!(
+                            "command exited with {}",
+                            out.status.code().map_or("signal".to_owned(), |c| c.to_string())
+                        )),
+                    ),
+                    Err(e) => (false, Some(format!("command failed: {e}"))),
+                };
+                Ok(HealthCheckResult {
+                    healthy,
+                    latency: start.elapsed(),
+                    message,
+                })
             }
             HealthCheckSpec::File { path, .. } => {
                 debug!("file health check: {}", path.display());
-                Ok(Path::new(path).exists())
+                let exists = Path::new(path).exists();
+                let message = if exists {
+                    None
+                } else {
+                    Some(format!("file not found: {}", path.display()))
+                };
+                Ok(HealthCheckResult {
+                    healthy: exists,
+                    latency: start.elapsed(),
+                    message,
+                })
             }
         }
     }
@@ -124,7 +164,9 @@ mod tests {
             max_failures: 3,
         };
         let result = checker.check(&spec).await.expect("check");
-        assert!(result, "/tmp should exist");
+        assert!(result.healthy, "/tmp should exist");
+        assert!(result.latency.as_nanos() > 0, "latency should be non-zero");
+        assert!(result.message.is_none(), "healthy check should have no message");
     }
 
     #[tokio::test]
@@ -136,7 +178,9 @@ mod tests {
             max_failures: 3,
         };
         let result = checker.check(&spec).await.expect("check");
-        assert!(!result);
+        assert!(!result.healthy);
+        assert!(result.message.is_some(), "unhealthy check should have a message");
+        assert!(result.message.as_ref().unwrap().contains("file not found"));
     }
 
     #[tokio::test]
@@ -148,7 +192,7 @@ mod tests {
             max_failures: 1,
         };
         let result = checker.check(&spec).await.expect("check");
-        assert!(!result);
+        assert!(!result.healthy);
     }
 
     #[tokio::test]
@@ -161,7 +205,8 @@ mod tests {
             max_failures: 1,
         };
         let result = checker.check(&spec).await.expect("check");
-        assert!(result);
+        assert!(result.healthy);
+        assert!(result.latency.as_nanos() > 0);
     }
 
     #[tokio::test]
@@ -174,6 +219,51 @@ mod tests {
             max_failures: 1,
         };
         let result = checker.check(&spec).await.expect("check");
-        assert!(!result);
+        assert!(!result.healthy);
+        assert!(result.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn healthy_result_has_latency() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::Command {
+            command: "true".to_owned(),
+            args: vec![],
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(result.healthy);
+        assert!(result.latency.as_nanos() > 0, "latency should be measured");
+    }
+
+    #[tokio::test]
+    async fn unhealthy_result_has_message() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::File {
+            path: PathBuf::from("/tmp/shihaisha-does-not-exist-qwerty"),
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(!result.healthy);
+        assert!(
+            result.message.is_some(),
+            "unhealthy result must carry a diagnostic message"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_check_result_latency() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::File {
+            path: PathBuf::from("/tmp"),
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(result.healthy);
+        // File checks are fast, but latency should still be measured
+        assert!(result.latency.as_secs() < 5, "file check should be fast");
     }
 }

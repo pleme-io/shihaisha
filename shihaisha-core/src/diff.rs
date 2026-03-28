@@ -9,6 +9,9 @@
 //! This is the foundation for a plan/apply workflow: compute the diff, show
 //! it to the user, then apply only if confirmed.
 
+use std::fmt;
+
+use crate::error::{Error, Result};
 use crate::types::service_spec::ServiceSpec;
 
 /// A single structural change between two specs.
@@ -39,15 +42,46 @@ pub enum Change {
     },
 }
 
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Added { path, value } => write!(f, "+ {path}: {value}"),
+            Self::Removed { path, value } => write!(f, "- {path}: {value}"),
+            Self::Modified { path, old, new } => {
+                write!(f, "~ {path}: {old} \u{2192} {new}")
+            }
+        }
+    }
+}
+
 /// Compute the structural diff between two `ServiceSpec` values.
 ///
 /// Returns an empty `Vec` when the specs are identical.  The comparison
 /// is performed on the JSON representation, so field ordering within
 /// objects does not matter.
+///
+/// # Examples
+///
+/// ```
+/// use shihaisha_core::{ServiceSpec, diff};
+///
+/// let old = ServiceSpec::new("web", "/usr/bin/web");
+/// let mut new = ServiceSpec::new("web", "/usr/bin/web");
+/// new.description = "Updated".to_owned();
+///
+/// let changes = diff(&old, &new).unwrap();
+/// assert!(!changes.is_empty());
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if either spec cannot be serialised to JSON.
 #[must_use]
-pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Vec<Change> {
-    let old_val = serde_json::to_value(old).expect("ServiceSpec serialises to JSON");
-    let new_val = serde_json::to_value(new).expect("ServiceSpec serialises to JSON");
+pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Result<Vec<Change>> {
+    let old_val = serde_json::to_value(old)
+        .map_err(|e| Error::Serialization(format!("failed to serialise old spec: {e}")))?;
+    let new_val = serde_json::to_value(new)
+        .map_err(|e| Error::Serialization(format!("failed to serialise new spec: {e}")))?;
     let mut changes = Vec::new();
     diff_values("", &old_val, &new_val, &mut changes);
     // Sort for deterministic output
@@ -64,7 +98,7 @@ pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Vec<Change> {
         };
         path_a.cmp(path_b)
     });
-    changes
+    Ok(changes)
 }
 
 /// Recursively diff two JSON values, accumulating changes.
@@ -143,7 +177,7 @@ mod tests {
     #[test]
     fn no_changes() {
         let spec = test_spec("test");
-        let changes = diff(&spec, &spec);
+        let changes = diff(&spec, &spec).unwrap();
         assert!(changes.is_empty(), "identical specs should produce no diff");
     }
 
@@ -151,7 +185,7 @@ mod tests {
     fn name_changed() {
         let old = test_spec("old-name");
         let new = test_spec("new-name");
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         let name_change = changes
             .iter()
@@ -174,7 +208,7 @@ mod tests {
         new.environment
             .insert("NEW_VAR".to_owned(), "value".to_owned());
 
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         let added = changes
             .iter()
@@ -198,7 +232,7 @@ mod tests {
             .insert("OLD_VAR".to_owned(), "gone".to_owned());
         let new = test_spec("test");
 
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         let removed = changes
             .iter()
@@ -221,7 +255,7 @@ mod tests {
         let mut new = test_spec("test");
         new.restart.strategy = RestartStrategy::Always;
 
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         let strategy_change = changes
             .iter()
@@ -248,7 +282,7 @@ mod tests {
         new.notify = true;
         new.timeout_start_sec = 120;
 
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         assert!(
             changes.len() >= 4,
@@ -279,8 +313,8 @@ mod tests {
         new.description = "Changed".to_owned();
         new.command = "/changed".to_owned();
 
-        let changes1 = diff(&old, &new);
-        let changes2 = diff(&old, &new);
+        let changes1 = diff(&old, &new).unwrap();
+        let changes2 = diff(&old, &new).unwrap();
 
         assert_eq!(changes1, changes2, "diff output should be deterministic");
     }
@@ -291,7 +325,7 @@ mod tests {
         let mut new = test_spec("test");
         new.args = vec!["--flag".to_owned()];
 
-        let changes = diff(&old, &new);
+        let changes = diff(&old, &new).unwrap();
 
         let args_change = changes
             .iter()
@@ -305,5 +339,38 @@ mod tests {
             }
             _ => panic!("expected Modified"),
         }
+    }
+
+    // --- Display tests ---
+
+    #[test]
+    fn display_added() {
+        let change = Change::Added {
+            path: "environment.NEW".to_owned(),
+            value: "\"hello\"".to_owned(),
+        };
+        let s = change.to_string();
+        assert_eq!(s, "+ environment.NEW: \"hello\"");
+    }
+
+    #[test]
+    fn display_removed() {
+        let change = Change::Removed {
+            path: "environment.OLD".to_owned(),
+            value: "\"goodbye\"".to_owned(),
+        };
+        let s = change.to_string();
+        assert_eq!(s, "- environment.OLD: \"goodbye\"");
+    }
+
+    #[test]
+    fn display_modified() {
+        let change = Change::Modified {
+            path: "restart.strategy".to_owned(),
+            old: "\"on-failure\"".to_owned(),
+            new: "\"always\"".to_owned(),
+        };
+        let s = change.to_string();
+        assert_eq!(s, "~ restart.strategy: \"on-failure\" \u{2192} \"always\"");
     }
 }

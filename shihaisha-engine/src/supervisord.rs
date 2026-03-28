@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use shihaisha_core::traits::config_translator::ConfigEmitter;
 use shihaisha_core::traits::init_backend::InitBackend;
 use shihaisha_core::{
     Error, HealthState, LogTarget, RestartStrategy, Result, ServiceSpec, ServiceState,
@@ -36,15 +37,20 @@ impl SupervisordBackend {
         for arg in args {
             cmd.arg(arg);
         }
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| Error::BackendError(format!("supervisorctl failed: {e}")))?;
+        let output = cmd.output().await.map_err(|e| Error::BackendError {
+            backend: "supervisord".to_owned(),
+            operation: "supervisorctl".to_owned(),
+            detail: format!("failed to execute: {e}"),
+        })?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(Error::BackendError(format!("supervisorctl error: {stderr}")))
+            Err(Error::BackendError {
+                backend: "supervisord".to_owned(),
+                operation: "supervisorctl".to_owned(),
+                detail: stderr.into_owned(),
+            })
         }
     }
 
@@ -56,6 +62,20 @@ impl SupervisordBackend {
 impl Default for SupervisordBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ConfigEmitter for SupervisordBackend {
+    fn emit(&self, spec: &ServiceSpec) -> Result<String> {
+        Ok(spec_to_conf(spec))
+    }
+
+    fn extension(&self) -> &str {
+        "conf"
+    }
+
+    fn name(&self) -> &str {
+        "supervisord"
     }
 }
 
@@ -153,7 +173,7 @@ pub fn spec_to_conf(spec: &ServiceSpec) -> String {
     if let Some(ref res) = spec.resources {
         if let Some(nice) = res.nice {
             // supervisord priority: lower = start first (opposite of nice)
-            let priority = 999 + nice;
+            let priority = 999 + nice.value();
             conf.push_str(&format!("priority={priority}\n"));
         }
     }
@@ -189,32 +209,54 @@ impl InitBackend for SupervisordBackend {
     async fn install(&self, spec: &ServiceSpec) -> Result<()> {
         tokio::fs::create_dir_all(&self.config_dir)
             .await
-            .map_err(|e| Error::BackendError(format!("failed to create config dir: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "supervisord".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to create config dir: {e}"),
+            })?;
 
         let conf = spec_to_conf(spec);
         tokio::fs::write(self.conf_path(&spec.name), conf)
             .await
-            .map_err(|e| Error::BackendError(format!("failed to write config: {e}")))?;
+            .map_err(|e| Error::BackendError {
+                backend: "supervisord".to_owned(),
+                operation: "install".to_owned(),
+                detail: format!("failed to write config: {e}"),
+            })?;
 
         // Tell supervisord to re-read and apply config changes
-        let _ = self.supervisorctl(&["reread"]).await;
-        let _ = self.supervisorctl(&["update"]).await;
+        if let Err(e) = self.supervisorctl(&["reread"]).await {
+            tracing::warn!(error = %e, "failed to reread after install, continuing");
+        }
+        if let Err(e) = self.supervisorctl(&["update"]).await {
+            tracing::warn!(error = %e, "failed to update after install, continuing");
+        }
         Ok(())
     }
 
     async fn uninstall(&self, name: &str) -> Result<()> {
-        // Stop first, ignore errors
-        let _ = self.stop(name).await;
+        // Stop first, continuing on errors
+        if let Err(e) = self.stop(name).await {
+            tracing::warn!(service = name, error = %e, "failed to stop during uninstall, continuing");
+        }
 
         let path = self.conf_path(name);
         if path.exists() {
             tokio::fs::remove_file(&path)
                 .await
-                .map_err(|e| Error::BackendError(format!("failed to remove config: {e}")))?;
+                .map_err(|e| Error::BackendError {
+                    backend: "supervisord".to_owned(),
+                    operation: "uninstall".to_owned(),
+                    detail: format!("failed to remove config: {e}"),
+                })?;
         }
 
-        let _ = self.supervisorctl(&["reread"]).await;
-        let _ = self.supervisorctl(&["update"]).await;
+        if let Err(e) = self.supervisorctl(&["reread"]).await {
+            tracing::warn!(service = name, error = %e, "failed to reread after uninstall, continuing");
+        }
+        if let Err(e) = self.supervisorctl(&["update"]).await {
+            tracing::warn!(service = name, error = %e, "failed to update after uninstall, continuing");
+        }
         Ok(())
     }
 
@@ -278,10 +320,13 @@ impl InitBackend for SupervisordBackend {
     }
 
     async fn list(&self) -> Result<Vec<ServiceStatus>> {
-        let output = self
-            .supervisorctl(&["status"])
-            .await
-            .unwrap_or_default();
+        let output = match self.supervisorctl(&["status"]).await {
+            Ok(out) => out,
+            Err(e) => {
+                tracing::debug!(error = %e, "supervisorctl status failed, returning empty list");
+                return Ok(Vec::new());
+            }
+        };
 
         let mut services = Vec::new();
         for line in output.lines() {
@@ -485,6 +530,7 @@ mod tests {
 
     #[test]
     fn conf_priority_from_nice() {
+        use shihaisha_core::types::resource_limits::NiceValue;
         let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: None,
@@ -493,7 +539,7 @@ mod tests {
             cpu_quota: None,
             tasks_max: None,
             io_weight: None,
-            nice: Some(5),
+            nice: Some(NiceValue::new(5).unwrap()),
         });
 
         let conf = spec_to_conf(&spec);
@@ -611,6 +657,6 @@ mod tests {
     #[test]
     fn backend_name_is_supervisord() {
         let backend = SupervisordBackend::new();
-        assert_eq!(backend.name(), "supervisord");
+        assert_eq!(InitBackend::name(&backend), "supervisord");
     }
 }

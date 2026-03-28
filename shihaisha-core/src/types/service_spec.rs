@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::path::PathBuf;
 
 use super::backend_overrides::BackendOverrides;
@@ -54,9 +55,25 @@ pub struct ServiceSpec {
     #[serde(default)]
     pub depends_on: DependencySpec,
 
-    /// Health check configuration.
+    /// Liveness probe -- is the process alive? If failing, restart it.
+    /// Accepts the legacy `health` YAML key for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "health")]
+    pub liveness: Option<HealthCheckSpec>,
+
+    /// Readiness probe -- is the process ready to serve?
+    /// Dependents wait for this before starting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<HealthCheckSpec>,
+
+    /// Startup probe -- has the process finished initializing?
+    /// Suppresses liveness checks during slow startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<HealthCheckSpec>,
+
+    /// If true, failure of this service triggers shutdown of all dependents.
+    /// Use for critical infrastructure services (databases, message brokers).
     #[serde(default)]
-    pub health: Option<HealthCheckSpec>,
+    pub critical: bool,
 
     /// Socket activation.
     #[serde(default)]
@@ -114,6 +131,19 @@ pub enum ServiceType {
     Socket,
 }
 
+impl fmt::Display for ServiceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Simple => write!(f, "simple"),
+            Self::Oneshot => write!(f, "oneshot"),
+            Self::Notify => write!(f, "notify"),
+            Self::Forking => write!(f, "forking"),
+            Self::Timer => write!(f, "timer"),
+            Self::Socket => write!(f, "socket"),
+        }
+    }
+}
+
 /// How and when to restart the service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestartPolicy {
@@ -168,6 +198,40 @@ pub enum RestartStrategy {
     Never,
 }
 
+impl fmt::Display for RestartStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Always => write!(f, "always"),
+            Self::OnFailure => write!(f, "on-failure"),
+            Self::OnSuccess => write!(f, "on-success"),
+            Self::Never => write!(f, "never"),
+        }
+    }
+}
+
+/// Condition that must be met before a dependency is considered satisfied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyCondition {
+    /// Dependency process has started (default).
+    #[default]
+    ServiceStarted,
+    /// Dependency has passed its readiness probe.
+    ServiceHealthy,
+    /// Dependency has exited successfully (for oneshot services).
+    ServiceCompletedSuccessfully,
+}
+
+impl fmt::Display for DependencyCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ServiceStarted => write!(f, "service_started"),
+            Self::ServiceHealthy => write!(f, "service_healthy"),
+            Self::ServiceCompletedSuccessfully => write!(f, "service_completed_successfully"),
+        }
+    }
+}
+
 /// Dependency and ordering specification.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DependencySpec {
@@ -190,11 +254,37 @@ pub struct DependencySpec {
     /// Conflicting services (stopped when this starts).
     #[serde(default)]
     pub conflicts: Vec<String>,
+
+    /// Conditions for each dependency in `requires` and `wants`.
+    /// Map from service name to condition. Services not in the map default
+    /// to `ServiceStarted`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conditions: BTreeMap<String, DependencyCondition>,
+
+    /// Services that must be stopped BEFORE this service stops.
+    /// Enables ordered graceful shutdown (reverse of startup).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_before: Vec<String>,
+
+    /// Services that must be stopped AFTER this service stops.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_after: Vec<String>,
 }
 
 impl ServiceSpec {
     /// Create a new `ServiceSpec` with the given name and command, filling
     /// sensible defaults for all other fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use shihaisha_core::ServiceSpec;
+    ///
+    /// let spec = ServiceSpec::new("my-app", "/usr/bin/my-app");
+    /// assert_eq!(spec.name, "my-app");
+    /// assert_eq!(spec.command, "/usr/bin/my-app");
+    /// assert!(spec.args.is_empty());
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
         let name = name.into();
@@ -209,7 +299,10 @@ impl ServiceSpec {
             environment: HashMap::new(),
             restart: RestartPolicy::default(),
             depends_on: DependencySpec::default(),
-            health: None,
+            liveness: None,
+            readiness: None,
+            startup: None,
+            critical: false,
             sockets: vec![],
             resources: None,
             logging: LoggingSpec::default(),
@@ -223,6 +316,7 @@ impl ServiceSpec {
     }
 
     /// Validate the spec, returning an error if any fields have invalid values.
+    #[must_use]
     pub fn validate(&self) -> crate::Result<()> {
         if self.name.is_empty() {
             return Err(crate::Error::ConfigError(
@@ -244,29 +338,9 @@ impl ServiceSpec {
                 "timeout_stop_sec must be > 0".to_owned(),
             ));
         }
-        if let Some(ref res) = self.resources {
-            if let Some(w) = res.cpu_weight {
-                if !(1..=10000).contains(&w) {
-                    return Err(crate::Error::ConfigError(
-                        format!("cpu_weight must be 1-10000, got {w}"),
-                    ));
-                }
-            }
-            if let Some(w) = res.io_weight {
-                if !(1..=10000).contains(&w) {
-                    return Err(crate::Error::ConfigError(
-                        format!("io_weight must be 1-10000, got {w}"),
-                    ));
-                }
-            }
-            if let Some(n) = res.nice {
-                if !(-20..=19).contains(&n) {
-                    return Err(crate::Error::ConfigError(
-                        format!("nice must be -20..19, got {n}"),
-                    ));
-                }
-            }
-        }
+        // Note: cpu_weight, io_weight, and nice are validated at
+        // construction time by their newtype wrappers (Weight, NiceValue).
+        // No additional range checks needed here.
         if self.restart.strategy != RestartStrategy::Never && self.restart.delay_secs == 0 {
             return Err(crate::Error::ConfigError(
                 "restart.delay_secs must be > 0 when strategy is not Never".to_owned(),
@@ -323,6 +397,9 @@ command: /usr/bin/myapp
         assert!(dep.requires.is_empty());
         assert!(dep.wants.is_empty());
         assert!(dep.conflicts.is_empty());
+        assert!(dep.conditions.is_empty());
+        assert!(dep.stop_before.is_empty());
+        assert!(dep.stop_after.is_empty());
     }
 
     #[test]
@@ -434,35 +511,21 @@ timeout_stop_sec: 60
     }
 
     #[test]
-    fn validate_cpu_weight_out_of_range() {
-        let mut spec = ServiceSpec::new("test", "/bin/true");
-        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
-            cpu_weight: Some(0),
-            ..Default::default()
-        });
-        let err = spec.validate().unwrap_err();
-        assert!(err.to_string().contains("cpu_weight must be 1-10000"));
+    fn weight_rejects_out_of_range() {
+        // Weight and NiceValue newtypes self-validate at construction.
+        use crate::types::resource_limits::Weight;
+        let err = Weight::new(0).unwrap_err();
+        assert!(err.to_string().contains("weight must be 1-10000"));
+        let err = Weight::new(10001).unwrap_err();
+        assert!(err.to_string().contains("weight must be 1-10000"));
     }
 
     #[test]
-    fn validate_io_weight_out_of_range() {
-        let mut spec = ServiceSpec::new("test", "/bin/true");
-        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
-            io_weight: Some(20000),
-            ..Default::default()
-        });
-        let err = spec.validate().unwrap_err();
-        assert!(err.to_string().contains("io_weight must be 1-10000"));
-    }
-
-    #[test]
-    fn validate_nice_out_of_range() {
-        let mut spec = ServiceSpec::new("test", "/bin/true");
-        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
-            nice: Some(20),
-            ..Default::default()
-        });
-        let err = spec.validate().unwrap_err();
+    fn nice_rejects_out_of_range() {
+        use crate::types::resource_limits::NiceValue;
+        let err = NiceValue::new(20).unwrap_err();
+        assert!(err.to_string().contains("nice must be -20..19"));
+        let err = NiceValue::new(-21).unwrap_err();
         assert!(err.to_string().contains("nice must be -20..19"));
     }
 
@@ -481,5 +544,187 @@ timeout_stop_sec: 60
         spec.restart.strategy = RestartStrategy::Never;
         spec.restart.delay_secs = 0;
         spec.validate().expect("Never strategy allows delay_secs=0");
+    }
+
+    #[test]
+    fn service_type_display() {
+        assert_eq!(ServiceType::Simple.to_string(), "simple");
+        assert_eq!(ServiceType::Oneshot.to_string(), "oneshot");
+        assert_eq!(ServiceType::Forking.to_string(), "forking");
+        assert_eq!(ServiceType::Notify.to_string(), "notify");
+        assert_eq!(ServiceType::Timer.to_string(), "timer");
+        assert_eq!(ServiceType::Socket.to_string(), "socket");
+    }
+
+    #[test]
+    fn restart_strategy_display() {
+        assert_eq!(RestartStrategy::Always.to_string(), "always");
+        assert_eq!(RestartStrategy::OnFailure.to_string(), "on-failure");
+        assert_eq!(RestartStrategy::OnSuccess.to_string(), "on-success");
+        assert_eq!(RestartStrategy::Never.to_string(), "never");
+    }
+
+    // --- Liveness / readiness / startup probe tests ---
+
+    #[test]
+    fn legacy_health_field_deserializes_as_liveness() {
+        let yaml = r#"
+name: legacy-svc
+command: /usr/bin/app
+health:
+  type: http
+  endpoint: http://localhost:8080/health
+"#;
+        let spec: ServiceSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        assert!(spec.liveness.is_some(), "health alias should populate liveness");
+        assert!(spec.readiness.is_none());
+        assert!(spec.startup.is_none());
+    }
+
+    #[test]
+    fn new_probe_fields_deserialize() {
+        let yaml = r#"
+name: probed-svc
+command: /usr/bin/app
+liveness:
+  type: http
+  endpoint: http://localhost:8080/live
+readiness:
+  type: tcp
+  address: 127.0.0.1:5432
+startup:
+  type: command
+  command: /usr/bin/check-init
+"#;
+        let spec: ServiceSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        assert!(spec.liveness.is_some());
+        assert!(spec.readiness.is_some());
+        assert!(spec.startup.is_some());
+    }
+
+    #[test]
+    fn probes_default_to_none() {
+        let spec = ServiceSpec::new("test", "/bin/true");
+        assert!(spec.liveness.is_none());
+        assert!(spec.readiness.is_none());
+        assert!(spec.startup.is_none());
+    }
+
+    // --- critical field tests ---
+
+    #[test]
+    fn critical_defaults_to_false() {
+        let spec = ServiceSpec::new("test", "/bin/true");
+        assert!(!spec.critical);
+    }
+
+    #[test]
+    fn critical_field_deserializes() {
+        let yaml = r#"
+name: db
+command: /usr/bin/postgres
+critical: true
+"#;
+        let spec: ServiceSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        assert!(spec.critical);
+    }
+
+    #[test]
+    fn critical_field_roundtrip() {
+        let mut spec = ServiceSpec::new("db", "/usr/bin/postgres");
+        spec.critical = true;
+        let yaml = serde_yaml_ng::to_string(&spec).expect("serialize");
+        let parsed: ServiceSpec = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+        assert!(parsed.critical);
+    }
+
+    // --- DependencyCondition tests ---
+
+    #[test]
+    fn dependency_condition_serializes_snake_case() {
+        let json = serde_json::to_string(&DependencyCondition::ServiceHealthy).expect("serialize");
+        assert_eq!(json, "\"service_healthy\"");
+
+        let parsed: DependencyCondition =
+            serde_json::from_str("\"service_completed_successfully\"").expect("parse");
+        assert_eq!(parsed, DependencyCondition::ServiceCompletedSuccessfully);
+    }
+
+    #[test]
+    fn dependency_condition_default_is_service_started() {
+        assert_eq!(
+            DependencyCondition::default(),
+            DependencyCondition::ServiceStarted,
+        );
+    }
+
+    #[test]
+    fn dependency_condition_display() {
+        assert_eq!(
+            DependencyCondition::ServiceStarted.to_string(),
+            "service_started",
+        );
+        assert_eq!(
+            DependencyCondition::ServiceHealthy.to_string(),
+            "service_healthy",
+        );
+        assert_eq!(
+            DependencyCondition::ServiceCompletedSuccessfully.to_string(),
+            "service_completed_successfully",
+        );
+    }
+
+    #[test]
+    fn conditions_map_deserializes() {
+        let yaml = r#"
+name: app
+command: /usr/bin/app
+depends_on:
+  requires:
+    - database
+    - cache
+  conditions:
+    database: service_healthy
+    cache: service_completed_successfully
+"#;
+        let spec: ServiceSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        assert_eq!(
+            spec.depends_on.conditions.get("database"),
+            Some(&DependencyCondition::ServiceHealthy),
+        );
+        assert_eq!(
+            spec.depends_on.conditions.get("cache"),
+            Some(&DependencyCondition::ServiceCompletedSuccessfully),
+        );
+    }
+
+    // --- Shutdown ordering tests ---
+
+    #[test]
+    fn shutdown_ordering_deserializes() {
+        let yaml = r#"
+name: app
+command: /usr/bin/app
+depends_on:
+  stop_before:
+    - cache
+  stop_after:
+    - database
+"#;
+        let spec: ServiceSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        assert_eq!(spec.depends_on.stop_before, vec!["cache"]);
+        assert_eq!(spec.depends_on.stop_after, vec!["database"]);
+    }
+
+    #[test]
+    fn shutdown_ordering_roundtrip() {
+        let mut spec = ServiceSpec::new("app", "/usr/bin/app");
+        spec.depends_on.stop_before = vec!["cache".to_owned()];
+        spec.depends_on.stop_after = vec!["database".to_owned()];
+
+        let yaml = serde_yaml_ng::to_string(&spec).expect("serialize");
+        let parsed: ServiceSpec = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+        assert_eq!(parsed.depends_on.stop_before, vec!["cache"]);
+        assert_eq!(parsed.depends_on.stop_after, vec!["database"]);
     }
 }

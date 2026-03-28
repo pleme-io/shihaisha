@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Runtime status of a managed service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +56,8 @@ pub enum ServiceState {
     Starting,
     /// Running and ready.
     Running,
+    /// Running but health checks failing.
+    Degraded,
     /// Reloading configuration.
     Reloading,
     /// Shutting down.
@@ -65,6 +68,65 @@ pub enum ServiceState {
     Failed,
     /// State cannot be determined.
     Unknown,
+}
+
+/// High-level phase (Kubernetes-style summary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServicePhase {
+    /// Waiting to start.
+    Pending,
+    /// Actively running (may be degraded).
+    Running,
+    /// Completed successfully.
+    Succeeded,
+    /// Crashed or exceeded restart limit.
+    Failed,
+    /// State cannot be determined.
+    Unknown,
+}
+
+impl fmt::Display for ServicePhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Running => write!(f, "running"),
+            Self::Succeeded => write!(f, "succeeded"),
+            Self::Failed => write!(f, "failed"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl ServiceState {
+    /// Map detailed state to high-level phase.
+    #[must_use]
+    pub fn phase(&self) -> ServicePhase {
+        match self {
+            Self::Inactive | Self::Stopped => ServicePhase::Pending,
+            Self::Starting => ServicePhase::Pending,
+            Self::Running | Self::Degraded | Self::Reloading => ServicePhase::Running,
+            Self::Stopping => ServicePhase::Running,
+            Self::Failed => ServicePhase::Failed,
+            Self::Unknown => ServicePhase::Unknown,
+        }
+    }
+}
+
+impl fmt::Display for ServiceState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inactive => write!(f, "inactive"),
+            Self::Starting => write!(f, "starting"),
+            Self::Running => write!(f, "running"),
+            Self::Degraded => write!(f, "degraded"),
+            Self::Reloading => write!(f, "reloading"),
+            Self::Stopping => write!(f, "stopping"),
+            Self::Stopped => write!(f, "stopped"),
+            Self::Failed => write!(f, "failed"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
 }
 
 /// Health state of a service (separate from process state).
@@ -80,6 +142,17 @@ pub enum HealthState {
     Unhealthy,
     /// Some checks passing, some failing.
     Degraded,
+}
+
+impl fmt::Display for HealthState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "unknown"),
+            Self::Healthy => write!(f, "healthy"),
+            Self::Unhealthy => write!(f, "unhealthy"),
+            Self::Degraded => write!(f, "degraded"),
+        }
+    }
 }
 
 impl ServiceStatus {
@@ -186,6 +259,7 @@ mod tests {
             ServiceState::Inactive,
             ServiceState::Starting,
             ServiceState::Running,
+            ServiceState::Degraded,
             ServiceState::Reloading,
             ServiceState::Stopping,
             ServiceState::Stopped,
@@ -217,5 +291,67 @@ mod tests {
         let status = ServiceStatus::new("test", ServiceState::Running, "native")
             .with_pid(12345);
         assert_eq!(status.pid, Some(12345));
+    }
+
+    #[test]
+    fn service_state_display() {
+        assert_eq!(ServiceState::Inactive.to_string(), "inactive");
+        assert_eq!(ServiceState::Running.to_string(), "running");
+        assert_eq!(ServiceState::Degraded.to_string(), "degraded");
+        assert_eq!(ServiceState::Failed.to_string(), "failed");
+        assert_eq!(ServiceState::Starting.to_string(), "starting");
+        assert_eq!(ServiceState::Stopping.to_string(), "stopping");
+        assert_eq!(ServiceState::Stopped.to_string(), "stopped");
+        assert_eq!(ServiceState::Reloading.to_string(), "reloading");
+        assert_eq!(ServiceState::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn health_state_display() {
+        assert_eq!(HealthState::Unknown.to_string(), "unknown");
+        assert_eq!(HealthState::Healthy.to_string(), "healthy");
+        assert_eq!(HealthState::Unhealthy.to_string(), "unhealthy");
+        assert_eq!(HealthState::Degraded.to_string(), "degraded");
+    }
+
+    // --- ServicePhase tests ---
+
+    #[test]
+    fn phase_mapping() {
+        assert_eq!(ServiceState::Inactive.phase(), ServicePhase::Pending);
+        assert_eq!(ServiceState::Stopped.phase(), ServicePhase::Pending);
+        assert_eq!(ServiceState::Starting.phase(), ServicePhase::Pending);
+        assert_eq!(ServiceState::Running.phase(), ServicePhase::Running);
+        assert_eq!(ServiceState::Degraded.phase(), ServicePhase::Running);
+        assert_eq!(ServiceState::Reloading.phase(), ServicePhase::Running);
+        assert_eq!(ServiceState::Stopping.phase(), ServicePhase::Running);
+        assert_eq!(ServiceState::Failed.phase(), ServicePhase::Failed);
+        assert_eq!(ServiceState::Unknown.phase(), ServicePhase::Unknown);
+    }
+
+    #[test]
+    fn service_phase_display() {
+        assert_eq!(ServicePhase::Pending.to_string(), "pending");
+        assert_eq!(ServicePhase::Running.to_string(), "running");
+        assert_eq!(ServicePhase::Succeeded.to_string(), "succeeded");
+        assert_eq!(ServicePhase::Failed.to_string(), "failed");
+        assert_eq!(ServicePhase::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn service_phase_serializes_lowercase() {
+        let json = serde_json::to_string(&ServicePhase::Running).expect("serialize");
+        assert_eq!(json, "\"running\"");
+
+        let parsed: ServicePhase = serde_json::from_str("\"failed\"").expect("parse");
+        assert_eq!(parsed, ServicePhase::Failed);
+    }
+
+    #[test]
+    fn degraded_state_serializes_lowercase() {
+        let json = serde_json::to_string(&ServiceState::Degraded).expect("serialize");
+        assert_eq!(json, "\"degraded\"");
+        let parsed: ServiceState = serde_json::from_str("\"degraded\"").expect("parse");
+        assert_eq!(parsed, ServiceState::Degraded);
     }
 }

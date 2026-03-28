@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Result of a single health check execution, carrying diagnostics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HealthCheckResult {
+    /// Whether the service is considered healthy.
+    pub healthy: bool,
+    /// How long the check took to complete.
+    pub latency: Duration,
+    /// Optional diagnostic message (typically set on failure).
+    pub message: Option<String>,
+}
 
 /// Health check specification — determines how to verify a service is healthy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

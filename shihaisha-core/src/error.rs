@@ -1,5 +1,3 @@
-use std::fmt;
-
 /// Errors that can occur in shihaisha service management.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -15,9 +13,16 @@ pub enum Error {
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
 
-    /// An error occurred in the backend.
-    #[error("backend error: {0}")]
-    BackendError(String),
+    /// An error occurred in a specific backend operation.
+    #[error("{backend}: {operation} failed: {detail}")]
+    BackendError {
+        /// Which backend produced the error (e.g., `"systemd"`, `"launchd"`).
+        backend: String,
+        /// The operation that failed (e.g., `"install"`, `"start"`, `"systemctl"`).
+        operation: String,
+        /// Human-readable detail about the failure.
+        detail: String,
+    },
 
     /// Configuration error.
     #[error("config error: {0}")]
@@ -56,15 +61,53 @@ impl Error {
     /// Returns `true` if this is a retryable error.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Io(_) | Self::BackendError(_) | Self::TimeoutError { .. })
+        matches!(
+            self,
+            Self::Io(_) | Self::BackendError { .. } | Self::TimeoutError { .. }
+        )
     }
 }
 
 // Allow `Error` to be compared for testing purposes.
 impl PartialEq for Error {
     fn eq(&self, other: &Self) -> bool {
-        // Compare by Debug representation since Io errors don't implement PartialEq.
-        fmt::format(format_args!("{self:?}")) == fmt::format(format_args!("{other:?}"))
+        match (self, other) {
+            // Io errors: compare by ErrorKind (the inner error doesn't impl PartialEq).
+            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
+            // String-carrying variants: compare payloads directly.
+            (Self::ServiceNotFound(a), Self::ServiceNotFound(b))
+            | (Self::ServiceAlreadyExists(a), Self::ServiceAlreadyExists(b))
+            | (Self::BackendUnavailable(a), Self::BackendUnavailable(b))
+            | (Self::ConfigError(a), Self::ConfigError(b))
+            | (Self::DependencyError(a), Self::DependencyError(b))
+            | (Self::HealthCheckFailed(a), Self::HealthCheckFailed(b))
+            | (Self::Serialization(a), Self::Serialization(b)) => a == b,
+            // Struct variants: compare all fields.
+            (
+                Self::BackendError {
+                    backend: b1,
+                    operation: o1,
+                    detail: d1,
+                },
+                Self::BackendError {
+                    backend: b2,
+                    operation: o2,
+                    detail: d2,
+                },
+            ) => b1 == b2 && o1 == o2 && d1 == d2,
+            (
+                Self::TimeoutError {
+                    service: s1,
+                    timeout_secs: t1,
+                },
+                Self::TimeoutError {
+                    service: s2,
+                    timeout_secs: t2,
+                },
+            ) => s1 == s2 && t1 == t2,
+            // Different variant discriminants are never equal.
+            _ => false,
+        }
     }
 }
 
@@ -97,9 +140,87 @@ mod tests {
     #[test]
     fn retryable_errors() {
         assert!(Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")).is_retryable());
-        assert!(Error::BackendError("x".to_owned()).is_retryable());
-        assert!(Error::TimeoutError { service: "x".to_owned(), timeout_secs: 1 }.is_retryable());
+        assert!(Error::BackendError {
+            backend: "test".to_owned(),
+            operation: "op".to_owned(),
+            detail: "x".to_owned(),
+        }
+        .is_retryable());
+        assert!(
+            Error::TimeoutError {
+                service: "x".to_owned(),
+                timeout_secs: 1,
+            }
+            .is_retryable()
+        );
         assert!(!Error::ServiceNotFound("x".to_owned()).is_retryable());
         assert!(!Error::ConfigError("x".to_owned()).is_retryable());
+    }
+
+    #[test]
+    fn backend_error_display_format() {
+        let err = Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "install".to_owned(),
+            detail: "unit file write denied".to_owned(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "systemd: install failed: unit file write denied"
+        );
+    }
+
+    #[test]
+    fn backend_error_fields_accessible() {
+        let err = Error::BackendError {
+            backend: "launchd".to_owned(),
+            operation: "start".to_owned(),
+            detail: "bootstrap rejected".to_owned(),
+        };
+        match &err {
+            Error::BackendError {
+                backend,
+                operation,
+                detail,
+            } => {
+                assert_eq!(backend, "launchd");
+                assert_eq!(operation, "start");
+                assert_eq!(detail, "bootstrap rejected");
+            }
+            _ => panic!("expected BackendError variant"),
+        }
+    }
+
+    #[test]
+    fn matching_variants_equal() {
+        assert_eq!(
+            Error::ServiceNotFound("x".to_owned()),
+            Error::ServiceNotFound("x".to_owned()),
+        );
+        assert_eq!(
+            Error::ConfigError("cfg".to_owned()),
+            Error::ConfigError("cfg".to_owned()),
+        );
+        // Io errors with the same ErrorKind are equal
+        assert_eq!(
+            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "a")),
+            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "b")),
+        );
+    }
+
+    #[test]
+    fn different_variants_not_equal() {
+        assert_ne!(
+            Error::ServiceNotFound("x".to_owned()),
+            Error::ConfigError("x".to_owned()),
+        );
+        assert_ne!(
+            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "a")),
+            Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "a")),
+        );
+        assert_ne!(
+            Error::ServiceNotFound("x".to_owned()),
+            Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")),
+        );
     }
 }

@@ -26,6 +26,22 @@ use crate::{Error, Result};
 ///
 /// Returns service names in topological order (dependencies first).
 ///
+/// # Examples
+///
+/// ```
+/// use shihaisha_core::{ServiceSpec, DependencySpec, resolve_order};
+///
+/// let db = ServiceSpec::new("db", "/usr/bin/db");
+/// let mut app = ServiceSpec::new("app", "/usr/bin/app");
+/// app.depends_on = DependencySpec {
+///     after: vec!["db".to_owned()],
+///     ..DependencySpec::default()
+/// };
+///
+/// let order = resolve_order(&[db, app]).unwrap();
+/// assert_eq!(order, vec!["db", "app"]);
+/// ```
+///
 /// # Errors
 ///
 /// Returns `Error::DependencyError` if a circular dependency is detected.
@@ -147,6 +163,8 @@ pub fn validate_references(specs: &[ServiceSpec]) -> Result<()> {
             .chain(&spec.depends_on.requires)
             .chain(&spec.depends_on.wants)
             .chain(&spec.depends_on.conflicts)
+            .chain(&spec.depends_on.stop_before)
+            .chain(&spec.depends_on.stop_after)
         {
             if !names.contains(dep) {
                 return Err(Error::DependencyError(format!(
@@ -482,5 +500,66 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("circular dependency"));
+    }
+
+    #[test]
+    fn validate_then_resolve_succeeds() {
+        // Workflow: validate_references passes, then resolve_order returns correct order
+        let specs = [
+            no_deps("db"),
+            spec_with_deps(
+                "cache",
+                DependencySpec {
+                    after: vec!["db".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+            spec_with_deps(
+                "app",
+                DependencySpec {
+                    after: vec!["cache".to_owned()],
+                    requires: vec!["db".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+
+        // Step 1: validate references
+        validate_references(&specs).expect("all references should be valid");
+
+        // Step 2: resolve ordering
+        let order = resolve_order(&specs).expect("should resolve without cycles");
+
+        // db must come before cache, cache must come before app
+        let db_pos = order.iter().position(|n| n == "db").unwrap();
+        let cache_pos = order.iter().position(|n| n == "cache").unwrap();
+        let app_pos = order.iter().position(|n| n == "app").unwrap();
+        assert!(db_pos < cache_pos, "db before cache");
+        assert!(cache_pos < app_pos, "cache before app");
+    }
+
+    #[test]
+    fn resolve_order_with_unknown_deps_graceful() {
+        // If a spec references a dep that is not in the set, resolve_order
+        // should not crash. It simply ignores edges to unknown nodes since
+        // graph.get_mut(dep) returns None for unknown names.
+        let specs = [
+            no_deps("standalone"),
+            spec_with_deps(
+                "orphan",
+                DependencySpec {
+                    after: vec!["unknown-service".to_owned()],
+                    wants: vec!["another-missing".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+
+        // resolve_order should not panic or error -- it silently drops
+        // edges to services not in the set.
+        let order = resolve_order(&specs).expect("should not crash on unknown deps");
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&"standalone".to_owned()));
+        assert!(order.contains(&"orphan".to_owned()));
     }
 }

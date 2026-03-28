@@ -1,4 +1,4 @@
-use crate::types::health_check::HealthCheckSpec;
+use crate::types::health_check::{HealthCheckResult, HealthCheckSpec};
 use crate::Result;
 use async_trait::async_trait;
 
@@ -8,8 +8,8 @@ use async_trait::async_trait;
 /// command execution, file checks).
 #[async_trait]
 pub trait HealthChecker: Send + Sync {
-    /// Run the health check and return whether the service is healthy.
-    async fn check(&self, spec: &HealthCheckSpec) -> Result<bool>;
+    /// Run the health check and return a [`HealthCheckResult`] with diagnostics.
+    async fn check(&self, spec: &HealthCheckSpec) -> Result<HealthCheckResult>;
 
     /// Name of this health checker implementation.
     fn name(&self) -> &str;

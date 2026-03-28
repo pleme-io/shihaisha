@@ -625,6 +625,7 @@ dependencies = [
  "serde_yaml_ng",
  "shihaisha-core",
  "shihaisha-engine",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

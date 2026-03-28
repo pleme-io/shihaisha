@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Logging configuration for a service.
@@ -35,6 +36,17 @@ pub enum LogTarget {
     Null,
     /// Inherit the parent process's file descriptor.
     Inherit,
+}
+
+impl fmt::Display for LogTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Journal => write!(f, "journal"),
+            Self::File(path) => write!(f, "{}", path.display()),
+            Self::Null => write!(f, "null"),
+            Self::Inherit => write!(f, "inherit"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -75,6 +87,17 @@ stderr: inherit
         let logging: LoggingSpec = serde_yaml_ng::from_str(yaml).expect("parse");
         assert!(matches!(logging.stdout, LogTarget::Null));
         assert!(matches!(logging.stderr, LogTarget::Inherit));
+    }
+
+    #[test]
+    fn log_target_display() {
+        assert_eq!(LogTarget::Journal.to_string(), "journal");
+        assert_eq!(LogTarget::Null.to_string(), "null");
+        assert_eq!(LogTarget::Inherit.to_string(), "inherit");
+        assert_eq!(
+            LogTarget::File(PathBuf::from("/var/log/app.log")).to_string(),
+            "/var/log/app.log"
+        );
     }
 
     #[test]

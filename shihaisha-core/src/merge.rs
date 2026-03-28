@@ -11,7 +11,7 @@
 //! defaults and overlays progressively specialize, exactly like NixOS modules
 //! composed with `lib.mkMerge`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
 use crate::types::backend_overrides::BackendOverrides;
@@ -99,6 +99,19 @@ fn merge_json_map(
     result
 }
 
+/// Merge two `BTreeMap<String, V>` maps: overlay keys win.
+#[must_use]
+fn merge_btree_map<V: Clone>(
+    base: &BTreeMap<String, V>,
+    overlay: &BTreeMap<String, V>,
+) -> BTreeMap<String, V> {
+    let mut result = base.clone();
+    for (k, v) in overlay {
+        result.insert(k.clone(), v.clone());
+    }
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Merge implementations
 // ---------------------------------------------------------------------------
@@ -112,6 +125,7 @@ impl Merge for RestartPolicy {
 
 impl Merge for DependencySpec {
     /// Vec fields concatenate and deduplicate.
+    /// Map fields merge by key (overlay wins).
     fn merge(base: &Self, overlay: &Self) -> Self {
         Self {
             after: merge_vec_dedup(&base.after, &overlay.after),
@@ -119,6 +133,9 @@ impl Merge for DependencySpec {
             requires: merge_vec_dedup(&base.requires, &overlay.requires),
             wants: merge_vec_dedup(&base.wants, &overlay.wants),
             conflicts: merge_vec_dedup(&base.conflicts, &overlay.conflicts),
+            conditions: merge_btree_map(&base.conditions, &overlay.conditions),
+            stop_before: merge_vec_dedup(&base.stop_before, &overlay.stop_before),
+            stop_after: merge_vec_dedup(&base.stop_after, &overlay.stop_after),
         }
     }
 }
@@ -192,7 +209,13 @@ impl Merge for ServiceSpec {
             working_directory: merge_option(&base.working_directory, &overlay.working_directory),
             user: merge_option(&base.user, &overlay.user),
             group: merge_option(&base.group, &overlay.group),
-            health: merge_option(&base.health, &overlay.health),
+            liveness: merge_option(&base.liveness, &overlay.liveness),
+            readiness: merge_option(&base.readiness, &overlay.readiness),
+            startup: merge_option(&base.startup, &overlay.startup),
+
+            // Bool: overlay wins
+            critical: overlay.critical,
+
             resources: match (&base.resources, &overlay.resources) {
                 (Some(b), Some(o)) => Some(ResourceLimits::merge(b, o)),
                 (_, Some(o)) => Some(o.clone()),
@@ -215,6 +238,7 @@ impl Merge for ServiceSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::resource_limits::{MemorySize, NiceValue, Weight};
     use crate::types::service_spec::{RestartStrategy, ServiceType};
     use std::path::PathBuf;
 
@@ -238,9 +262,10 @@ mod tests {
             requires: vec!["database".to_owned()],
             wants: vec![],
             conflicts: vec![],
+            ..DependencySpec::default()
         };
         spec.resources = Some(ResourceLimits {
-            memory_max: Some("512M".to_owned()),
+            memory_max: Some(MemorySize::parse("512M").unwrap()),
             memory_high: None,
             cpu_weight: None,
             cpu_quota: None,
@@ -271,15 +296,16 @@ mod tests {
             requires: vec![],
             wants: vec!["metrics".to_owned()],
             conflicts: vec![],
+            ..DependencySpec::default()
         };
         spec.resources = Some(ResourceLimits {
-            memory_max: Some("1G".to_owned()),
+            memory_max: Some(MemorySize::parse("1G").unwrap()),
             memory_high: None,
-            cpu_weight: Some(500),
+            cpu_weight: Some(Weight::new(500).unwrap()),
             cpu_quota: None,
             tasks_max: None,
             io_weight: None,
-            nice: Some(-5),
+            nice: Some(NiceValue::new(-5).unwrap()),
         });
         spec.notify = true;
         spec.watchdog_sec = 30;
@@ -392,10 +418,10 @@ mod tests {
 
         // Resources: merged field-by-field
         let res = merged.resources.as_ref().expect("resources should exist");
-        assert_eq!(res.memory_max.as_deref(), Some("1G")); // overlay wins
+        assert_eq!(res.memory_max.as_ref().map(|m| m.to_string()).as_deref(), Some("1G")); // overlay wins
         assert_eq!(res.tasks_max, Some(256)); // base falls through
-        assert_eq!(res.cpu_weight, Some(500)); // overlay adds
-        assert_eq!(res.nice, Some(-5)); // overlay adds
+        assert_eq!(res.cpu_weight.map(|w| w.value()), Some(500)); // overlay adds
+        assert_eq!(res.nice.map(|n| n.value()), Some(-5)); // overlay adds
 
         // Args: concatenated + deduped
         assert!(merged.args.contains(&"--verbose".to_owned()));
@@ -467,7 +493,7 @@ mod tests {
 
         let merged = ServiceSpec::merge(&base, &overlay);
         let res = merged.resources.as_ref().expect("resources from base");
-        assert_eq!(res.memory_max.as_deref(), Some("512M"));
+        assert_eq!(res.memory_max.as_ref().map(|m| m.to_string()).as_deref(), Some("512M"));
         assert_eq!(res.tasks_max, Some(256));
     }
 
@@ -479,7 +505,112 @@ mod tests {
         let overlay = overlay_spec();
         let merged = ServiceSpec::merge(&base, &overlay);
         let res = merged.resources.as_ref().expect("resources from overlay");
-        assert_eq!(res.memory_max.as_deref(), Some("1G"));
-        assert_eq!(res.cpu_weight, Some(500));
+        assert_eq!(res.memory_max.as_ref().map(|m| m.to_string()).as_deref(), Some("1G"));
+        assert_eq!(res.cpu_weight.map(|w| w.value()), Some(500));
+    }
+
+    // --- Probe merge tests ---
+
+    #[test]
+    fn probe_fields_merge() {
+        use crate::types::health_check::HealthCheckSpec;
+
+        let mut base = base_spec();
+        base.liveness = Some(HealthCheckSpec::Http {
+            endpoint: "http://localhost:8080/live".to_owned(),
+            interval_secs: 10,
+            timeout_secs: 5,
+            max_failures: 3,
+        });
+        base.readiness = None;
+        base.startup = None;
+
+        let mut overlay = overlay_spec();
+        overlay.liveness = None;
+        overlay.readiness = Some(HealthCheckSpec::Tcp {
+            address: "127.0.0.1:5432".to_owned(),
+            interval_secs: 15,
+            max_failures: 5,
+        });
+        overlay.startup = Some(HealthCheckSpec::Command {
+            command: "/usr/bin/check-init".to_owned(),
+            args: vec![],
+            interval_secs: 5,
+            max_failures: 1,
+        });
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        // liveness: overlay is None, base has value -> base falls through
+        assert!(merged.liveness.is_some());
+        // readiness: overlay has value -> overlay wins
+        assert!(merged.readiness.is_some());
+        // startup: overlay has value -> overlay wins
+        assert!(merged.startup.is_some());
+    }
+
+    // --- Critical field merge test ---
+
+    #[test]
+    fn critical_overlay_wins() {
+        let mut base = base_spec();
+        base.critical = false;
+
+        let mut overlay = overlay_spec();
+        overlay.critical = true;
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        assert!(merged.critical);
+    }
+
+    // --- Conditions merge test ---
+
+    #[test]
+    fn conditions_map_merges() {
+        use crate::types::service_spec::DependencyCondition;
+        use std::collections::BTreeMap;
+
+        let mut base = base_spec();
+        base.depends_on.conditions = BTreeMap::from([
+            ("database".to_owned(), DependencyCondition::ServiceHealthy),
+        ]);
+
+        let mut overlay = overlay_spec();
+        overlay.depends_on.conditions = BTreeMap::from([
+            ("database".to_owned(), DependencyCondition::ServiceCompletedSuccessfully),
+            ("cache".to_owned(), DependencyCondition::ServiceStarted),
+        ]);
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        // overlay wins on conflict (database)
+        assert_eq!(
+            merged.depends_on.conditions.get("database"),
+            Some(&DependencyCondition::ServiceCompletedSuccessfully),
+        );
+        // overlay adds (cache)
+        assert_eq!(
+            merged.depends_on.conditions.get("cache"),
+            Some(&DependencyCondition::ServiceStarted),
+        );
+    }
+
+    // --- Shutdown ordering merge test ---
+
+    #[test]
+    fn shutdown_ordering_concat_dedup() {
+        let mut base = base_spec();
+        base.depends_on.stop_before = vec!["cache".to_owned()];
+        base.depends_on.stop_after = vec!["database".to_owned()];
+
+        let mut overlay = overlay_spec();
+        overlay.depends_on.stop_before = vec!["cache".to_owned(), "redis".to_owned()];
+        overlay.depends_on.stop_after = vec!["queue".to_owned()];
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        assert_eq!(merged.depends_on.stop_before.len(), 2); // cache, redis (deduped)
+        assert!(merged.depends_on.stop_before.contains(&"cache".to_owned()));
+        assert!(merged.depends_on.stop_before.contains(&"redis".to_owned()));
+        assert_eq!(merged.depends_on.stop_after.len(), 2); // database, queue
+        assert!(merged.depends_on.stop_after.contains(&"database".to_owned()));
+        assert!(merged.depends_on.stop_after.contains(&"queue".to_owned()));
     }
 }
