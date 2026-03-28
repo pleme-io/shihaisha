@@ -66,7 +66,7 @@ impl NativeBackend {
     }
 
     /// Spawn a process for a service and track it.
-    async fn spawn_process(&self, spec: &ServiceSpec) -> Result<u32> {
+    async fn spawn_process(&self, spec: &ServiceSpec) -> Result<Option<u32>> {
         let mut cmd = tokio::process::Command::new(&spec.command);
         cmd.args(&spec.args);
 
@@ -127,9 +127,9 @@ impl NativeBackend {
             .spawn()
             .map_err(|e| Error::BackendError(format!("failed to spawn process: {e}")))?;
 
-        let pid = child.id().unwrap_or(0);
+        let pid = child.id();
 
-        // Spawn a background task to watch for process exit
+        // Spawn a background task to watch for process exit and handle restarts
         let state = Arc::clone(&self.state);
         let name = spec.name.clone();
         let restart_strategy = spec.restart.strategy;
@@ -139,15 +139,19 @@ impl NativeBackend {
 
         tokio::spawn(async move {
             let mut child = child;
-            let exit_status = child.wait().await;
+            loop {
+                let exit_status = child.wait().await;
 
-            let exit_code = exit_status
-                .ok()
-                .and_then(|s| s.code())
-                .unwrap_or(-1);
+                let exit_code = exit_status
+                    .ok()
+                    .and_then(|s| s.code())
+                    .unwrap_or(-1);
 
-            let mut state_lock = state.write().await;
-            if let Some(svc_state) = state_lock.get_mut(&name) {
+                let mut state_lock = state.write().await;
+                let Some(svc_state) = state_lock.get_mut(&name) else {
+                    break;
+                };
+
                 svc_state.pid = None;
                 svc_state.exit_code = Some(exit_code);
 
@@ -164,9 +168,6 @@ impl NativeBackend {
                 if should_restart && within_retries {
                     svc_state.service_state = ServiceState::Starting;
                     svc_state.restart_count += 1;
-                    let restart_spec = spec_clone.clone();
-                    let state_for_restart = Arc::clone(&state);
-                    let name_for_restart = name.clone();
 
                     // Drop the lock before sleeping
                     drop(state_lock);
@@ -174,32 +175,35 @@ impl NativeBackend {
                     tokio::time::sleep(std::time::Duration::from_secs(restart_delay)).await;
 
                     // Re-spawn
-                    let mut cmd = tokio::process::Command::new(&restart_spec.command);
-                    cmd.args(&restart_spec.args);
-                    if let Some(ref wd) = restart_spec.working_directory {
+                    let mut cmd = tokio::process::Command::new(&spec_clone.command);
+                    cmd.args(&spec_clone.args);
+                    if let Some(ref wd) = spec_clone.working_directory {
                         cmd.current_dir(wd);
                     }
-                    for (k, v) in &restart_spec.environment {
+                    for (k, v) in &spec_clone.environment {
                         cmd.env(k, v);
                     }
                     cmd.stdout(std::process::Stdio::null());
                     cmd.stderr(std::process::Stdio::null());
 
-                    if let Ok(new_child) = cmd.spawn() {
-                        let new_pid = new_child.id().unwrap_or(0);
-                        let mut state_lock = state_for_restart.write().await;
-                        if let Some(svc_state) = state_lock.get_mut(&name_for_restart) {
-                            svc_state.pid = Some(new_pid);
-                            svc_state.service_state = ServiceState::Running;
-                            svc_state.started_at = Some(chrono::Utc::now());
+                    match cmd.spawn() {
+                        Ok(new_child) => {
+                            let new_pid = new_child.id();
+                            let mut state_lock = state.write().await;
+                            if let Some(svc_state) = state_lock.get_mut(&name) {
+                                svc_state.pid = new_pid;
+                                svc_state.service_state = ServiceState::Running;
+                                svc_state.started_at = Some(chrono::Utc::now());
+                            }
+                            // Continue the loop to watch the new child
+                            child = new_child;
                         }
-                        // Note: In a production implementation, we'd recursively
-                        // watch this new child too. For now, this handles one restart.
-                        let _ = new_child;
-                    } else {
-                        let mut state_lock = state_for_restart.write().await;
-                        if let Some(svc_state) = state_lock.get_mut(&name_for_restart) {
-                            svc_state.service_state = ServiceState::Failed;
+                        Err(_) => {
+                            let mut state_lock = state.write().await;
+                            if let Some(svc_state) = state_lock.get_mut(&name) {
+                                svc_state.service_state = ServiceState::Failed;
+                            }
+                            break;
                         }
                     }
                 } else {
@@ -208,6 +212,7 @@ impl NativeBackend {
                     } else {
                         ServiceState::Failed
                     };
+                    break;
                 }
             }
         });
@@ -307,7 +312,7 @@ impl InitBackend for NativeBackend {
             restart_count: 0,
             started_at: None,
         });
-        entry.pid = Some(pid);
+        entry.pid = pid;
         entry.service_state = ServiceState::Running;
         entry.started_at = Some(chrono::Utc::now());
         entry.spec = spec;
@@ -321,8 +326,9 @@ impl InitBackend for NativeBackend {
             state.get(name).and_then(|s| s.pid)
         };
 
-        if let Some(pid) = pid {
-            // Send SIGTERM via kill command
+        if let Some(pid) = pid.filter(|&p| p > 0) {
+            // Send SIGTERM via kill command (guard against PID 0 which
+            // would signal the entire process group).
             let output = tokio::process::Command::new("kill")
                 .arg(pid.to_string())
                 .output()
@@ -362,7 +368,7 @@ impl InitBackend for NativeBackend {
             state.get(name).and_then(|s| s.pid)
         };
 
-        if let Some(pid) = pid {
+        if let Some(pid) = pid.filter(|&p| p > 0) {
             let output = tokio::process::Command::new("kill")
                 .args(["-HUP", &pid.to_string()])
                 .output()
@@ -543,43 +549,19 @@ impl InitBackend for NativeBackend {
 
 /// Get the shihaisha config directory.
 fn config_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(|h| PathBuf::from(h).join(".config/shihaisha"))
-        .unwrap_or_else(|_| PathBuf::from("/tmp/shihaisha"))
+    crate::util::home_dir().join(".config/shihaisha")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn minimal_spec(name: &str) -> ServiceSpec {
-        ServiceSpec {
-            name: name.to_owned(),
-            description: format!("Test {name}"),
-            command: "/bin/echo".to_owned(),
-            args: vec!["hello".to_owned()],
-            service_type: shihaisha_core::ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: shihaisha_core::RestartPolicy {
-                strategy: RestartStrategy::Never,
-                delay_secs: 1,
-                max_retries: 0,
-                reset_after_secs: 300,
-            },
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+    fn test_spec(name: &str) -> ServiceSpec {
+        let mut spec = ServiceSpec::new(name, "/bin/echo");
+        spec.args = vec!["hello".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+        spec
     }
 
     #[tokio::test]
@@ -587,7 +569,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = NativeBackend::with_dir(dir.path().to_path_buf());
 
-        let spec = minimal_spec("test-native");
+        let spec = test_spec("test-native");
         backend.install(&spec).await.expect("install");
 
         // Check that the YAML file was written
@@ -607,7 +589,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = NativeBackend::with_dir(dir.path().to_path_buf());
 
-        let mut spec = minimal_spec("lifecycle-test");
+        let mut spec = test_spec("lifecycle-test");
         // Use a command that exits immediately
         spec.command = "/bin/echo".to_owned();
         spec.args = vec!["hello".to_owned()];
@@ -656,7 +638,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = NativeBackend::with_dir(dir.path().to_path_buf());
 
-        let spec = minimal_spec("removable");
+        let spec = test_spec("removable");
         backend.install(&spec).await.expect("install");
         assert!(dir.path().join("removable.yaml").exists());
 
@@ -692,7 +674,7 @@ mod tests {
         assert!(result.is_err());
 
         // Install and try again
-        let spec = minimal_spec("enableable");
+        let spec = test_spec("enableable");
         backend.install(&spec).await.expect("install");
         backend.enable("enableable").await.expect("enable");
         backend.disable("enableable").await.expect("disable");
@@ -703,7 +685,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = NativeBackend::with_dir(dir.path().to_path_buf());
 
-        let mut spec = minimal_spec("roundtrip");
+        let mut spec = test_spec("roundtrip");
         spec.environment
             .insert("FOO".to_owned(), "bar".to_owned());
         spec.working_directory = Some(PathBuf::from("/tmp"));
@@ -732,7 +714,7 @@ mod tests {
         let backend = NativeBackend::with_dir(dir.path().to_path_buf());
 
         // Write a YAML file directly to disk (simulating a previous session)
-        let spec = minimal_spec("disk-only");
+        let spec = test_spec("disk-only");
         let yaml = serde_yaml_ng::to_string(&spec).expect("serialize");
         tokio::fs::create_dir_all(dir.path())
             .await

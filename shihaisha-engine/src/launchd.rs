@@ -662,69 +662,32 @@ impl InitBackend for LaunchdBackend {
 
 /// Check if the current process is running as root on macOS.
 fn is_root_macos() -> bool {
-    std::env::var("SUDO_USER").is_ok()
-        || std::process::Command::new("id")
-            .args(["-u"])
-            .output()
-            .is_ok_and(|o| {
-                String::from_utf8_lossy(&o.stdout).trim() == "0"
-            })
+    crate::util::is_root()
 }
 
 /// Get current user UID.
 fn current_uid() -> u32 {
-    std::process::Command::new("id")
-        .args(["-u"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<u32>()
-                .ok()
-        })
-        .unwrap_or(501) // macOS default first user UID
+    crate::util::current_uid()
 }
 
 /// Get the user's home directory.
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    crate::util::home_dir()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "com.test.myapp".to_owned(),
-            description: "Test application".to_owned(),
-            command: "/usr/local/bin/myapp".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+    fn test_spec() -> ServiceSpec {
+        let mut spec = ServiceSpec::new("com.test.myapp", "/usr/local/bin/myapp");
+        spec.description = "Test application".to_owned();
+        spec
     }
 
     #[test]
     fn plist_generation_minimal() {
-        let spec = minimal_spec();
+        let spec = test_spec();
         let dict = spec_to_plist(&spec);
 
         assert_eq!(
@@ -760,7 +723,7 @@ mod tests {
 
     #[test]
     fn plist_with_args_and_env() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.args = vec!["--port".to_owned(), "8080".to_owned()];
         spec.environment
             .insert("RUST_LOG".to_owned(), "debug".to_owned());
@@ -793,7 +756,7 @@ mod tests {
 
     #[test]
     fn keepalive_mapping_always() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::Always;
 
         let dict = spec_to_plist(&spec);
@@ -806,7 +769,7 @@ mod tests {
 
     #[test]
     fn keepalive_mapping_on_failure() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::OnFailure;
 
         let dict = spec_to_plist(&spec);
@@ -825,7 +788,7 @@ mod tests {
 
     #[test]
     fn keepalive_mapping_never_oneshot() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::Never;
         spec.service_type = ServiceType::Oneshot;
 
@@ -839,7 +802,7 @@ mod tests {
 
     #[test]
     fn resource_limits_mapping() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: Some("1G".to_owned()),
             memory_high: Some("768M".to_owned()),
@@ -883,7 +846,7 @@ mod tests {
 
     #[test]
     fn resource_limits_high_cpu_weight() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: None,
             memory_high: None,
@@ -904,7 +867,7 @@ mod tests {
 
     #[test]
     fn plist_xml_roundtrip() {
-        let spec = minimal_spec();
+        let spec = test_spec();
         let dict = spec_to_plist(&spec);
         let xml = dict_to_xml(&dict).expect("should serialize to XML");
 
@@ -925,7 +888,7 @@ mod tests {
 
     #[test]
     fn throttle_interval_from_restart_delay() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.delay_secs = 10;
 
         let dict = spec_to_plist(&spec);
@@ -976,7 +939,7 @@ mod tests {
 
     #[test]
     fn launchd_overrides_applied() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.overrides.launchd.insert(
             "LowPriorityIO".to_owned(),
             serde_json::Value::Bool(true),
@@ -1032,7 +995,7 @@ com.test.myapp = {
 
     #[test]
     fn logging_file_targets_in_plist() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.logging.stdout = LogTarget::File(PathBuf::from("/var/log/app/out.log"));
         spec.logging.stderr = LogTarget::Null;
 

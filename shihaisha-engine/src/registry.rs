@@ -51,6 +51,27 @@ impl BackendRegistry {
         Self { backends, default }
     }
 
+    /// Create an empty registry (for testing).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            backends: HashMap::new(),
+            default: String::new(),
+        }
+    }
+
+    /// Create a registry with a single named backend (for testing).
+    #[must_use]
+    pub fn with_backend(name: impl Into<String>, backend: Box<dyn InitBackend>) -> Self {
+        let name = name.into();
+        let mut backends: HashMap<String, Box<dyn InitBackend>> = HashMap::new();
+        backends.insert(name.clone(), backend);
+        Self {
+            backends,
+            default: name,
+        }
+    }
+
     /// Get a backend by name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&dyn InitBackend> {
@@ -112,5 +133,26 @@ mod tests {
             registry.get(name).is_some(),
             "default_name should correspond to an available backend"
         );
+    }
+
+    #[test]
+    fn empty_registry_has_no_backends() {
+        let registry = BackendRegistry::empty();
+        assert!(registry.available_backends().is_empty());
+        assert!(registry.default_backend().is_none());
+    }
+
+    #[tokio::test]
+    async fn with_backend_contains_the_backend() {
+        let mock = shihaisha_core::mock::MockBackend::new();
+        let registry = BackendRegistry::with_backend("mock", Box::new(mock));
+        assert!(registry.get("mock").is_some());
+        assert_eq!(registry.default_name(), "mock");
+        assert_eq!(registry.available_backends().len(), 1);
+
+        // Verify the backend works
+        let backend = registry.default_backend().unwrap();
+        let status = backend.status("test").await.unwrap();
+        assert_eq!(status.backend, "mock");
     }
 }

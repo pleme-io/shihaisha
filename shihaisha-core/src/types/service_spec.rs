@@ -10,7 +10,7 @@ use super::socket_spec::SocketSpec;
 
 /// The canonical service specification.
 /// Written as YAML by users, translated to backend-native formats at runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceSpec {
     /// Unique service name (used as systemd unit name / launchd Label).
     pub name: String,
@@ -115,7 +115,7 @@ pub enum ServiceType {
 }
 
 /// How and when to restart the service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestartPolicy {
     /// Restart strategy.
     #[serde(default)]
@@ -169,7 +169,7 @@ pub enum RestartStrategy {
 }
 
 /// Dependency and ordering specification.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DependencySpec {
     /// Services that must start before this one.
     #[serde(default)]
@@ -192,15 +192,15 @@ pub struct DependencySpec {
     pub conflicts: Vec<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "test-service".to_owned(),
+impl ServiceSpec {
+    /// Create a new `ServiceSpec` with the given name and command, filling
+    /// sensible defaults for all other fields.
+    #[must_use]
+    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
+        let name = name.into();
+        Self {
             description: String::new(),
-            command: "/usr/bin/test".to_owned(),
+            command: command.into(),
             args: vec![],
             service_type: ServiceType::default(),
             working_directory: None,
@@ -218,12 +218,71 @@ mod tests {
             timeout_start_sec: default_timeout(),
             timeout_stop_sec: default_timeout(),
             overrides: BackendOverrides::default(),
+            name,
         }
     }
 
+    /// Validate the spec, returning an error if any fields have invalid values.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.name.is_empty() {
+            return Err(crate::Error::ConfigError(
+                "service name must not be empty".to_owned(),
+            ));
+        }
+        if self.command.is_empty() {
+            return Err(crate::Error::ConfigError(
+                "service command must not be empty".to_owned(),
+            ));
+        }
+        if self.timeout_start_sec == 0 {
+            return Err(crate::Error::ConfigError(
+                "timeout_start_sec must be > 0".to_owned(),
+            ));
+        }
+        if self.timeout_stop_sec == 0 {
+            return Err(crate::Error::ConfigError(
+                "timeout_stop_sec must be > 0".to_owned(),
+            ));
+        }
+        if let Some(ref res) = self.resources {
+            if let Some(w) = res.cpu_weight {
+                if !(1..=10000).contains(&w) {
+                    return Err(crate::Error::ConfigError(
+                        format!("cpu_weight must be 1-10000, got {w}"),
+                    ));
+                }
+            }
+            if let Some(w) = res.io_weight {
+                if !(1..=10000).contains(&w) {
+                    return Err(crate::Error::ConfigError(
+                        format!("io_weight must be 1-10000, got {w}"),
+                    ));
+                }
+            }
+            if let Some(n) = res.nice {
+                if !(-20..=19).contains(&n) {
+                    return Err(crate::Error::ConfigError(
+                        format!("nice must be -20..19, got {n}"),
+                    ));
+                }
+            }
+        }
+        if self.restart.strategy != RestartStrategy::Never && self.restart.delay_secs == 0 {
+            return Err(crate::Error::ConfigError(
+                "restart.delay_secs must be > 0 when strategy is not Never".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
     #[test]
     fn yaml_roundtrip() {
-        let spec = minimal_spec();
+        let spec = ServiceSpec::new("test-service", "/usr/bin/test");
         let yaml = serde_yaml_ng::to_string(&spec).expect("serialize");
         let parsed: ServiceSpec = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert_eq!(parsed.name, "test-service");
@@ -324,5 +383,103 @@ timeout_stop_sec: 60
         assert!(spec.notify);
         assert_eq!(spec.watchdog_sec, 30);
         assert_eq!(spec.timeout_start_sec, 120);
+    }
+
+    #[test]
+    fn new_constructor_defaults() {
+        let spec = ServiceSpec::new("test", "/bin/true");
+        assert_eq!(spec.name, "test");
+        assert_eq!(spec.command, "/bin/true");
+        assert_eq!(spec.service_type, ServiceType::Simple);
+        assert_eq!(spec.restart.strategy, RestartStrategy::OnFailure);
+        assert_eq!(spec.timeout_start_sec, 90);
+        assert!(spec.args.is_empty());
+        assert!(spec.environment.is_empty());
+    }
+
+    #[test]
+    fn validate_valid_spec() {
+        let spec = ServiceSpec::new("test", "/bin/true");
+        spec.validate().expect("should be valid");
+    }
+
+    #[test]
+    fn validate_empty_name() {
+        let spec = ServiceSpec::new("", "/bin/true");
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn validate_empty_command() {
+        let spec = ServiceSpec::new("test", "");
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("command must not be empty"));
+    }
+
+    #[test]
+    fn validate_zero_timeout_start() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.timeout_start_sec = 0;
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("timeout_start_sec must be > 0"));
+    }
+
+    #[test]
+    fn validate_zero_timeout_stop() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.timeout_stop_sec = 0;
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("timeout_stop_sec must be > 0"));
+    }
+
+    #[test]
+    fn validate_cpu_weight_out_of_range() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
+            cpu_weight: Some(0),
+            ..Default::default()
+        });
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("cpu_weight must be 1-10000"));
+    }
+
+    #[test]
+    fn validate_io_weight_out_of_range() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
+            io_weight: Some(20000),
+            ..Default::default()
+        });
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("io_weight must be 1-10000"));
+    }
+
+    #[test]
+    fn validate_nice_out_of_range() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.resources = Some(crate::types::resource_limits::ResourceLimits {
+            nice: Some(20),
+            ..Default::default()
+        });
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("nice must be -20..19"));
+    }
+
+    #[test]
+    fn validate_restart_delay_zero_with_strategy() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.restart.strategy = RestartStrategy::Always;
+        spec.restart.delay_secs = 0;
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("delay_secs must be > 0"));
+    }
+
+    #[test]
+    fn validate_restart_delay_zero_with_never() {
+        let mut spec = ServiceSpec::new("test", "/bin/true");
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 0;
+        spec.validate().expect("Never strategy allows delay_secs=0");
     }
 }

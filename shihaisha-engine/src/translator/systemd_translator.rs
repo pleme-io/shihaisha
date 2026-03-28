@@ -30,38 +30,13 @@ impl ConfigTranslator for SystemdTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shihaisha_core::*;
-    use std::collections::HashMap;
-
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "test-svc".to_owned(),
-            description: "Test".to_owned(),
-            command: "/usr/bin/test".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
-    }
+    use shihaisha_core::ServiceSpec;
 
     #[test]
     fn translate_produces_unit() {
+        let spec = ServiceSpec::new("test-svc", "/usr/bin/test");
         let translator = SystemdTranslator;
-        let result = translator.translate(&minimal_spec()).expect("translate");
+        let result = translator.translate(&spec).expect("translate");
         assert!(result.contains("[Unit]"));
         assert!(result.contains("[Service]"));
         assert!(result.contains("[Install]"));

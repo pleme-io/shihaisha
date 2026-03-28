@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Resource limits for a service (maps to systemd cgroup directives / launchd
 /// `HardResourceLimits`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ResourceLimits {
     /// Maximum memory (e.g., `"512M"`, `"1G"`). Maps to `MemoryMax=`.
     #[serde(default)]

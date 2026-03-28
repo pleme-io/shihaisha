@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Runtime status of a managed service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStatus {
     /// Service name.
     pub name: String,
@@ -80,6 +80,38 @@ pub enum HealthState {
     Unhealthy,
     /// Some checks passing, some failing.
     Degraded,
+}
+
+impl ServiceStatus {
+    /// Create a new `ServiceStatus` with the given name, state, and backend,
+    /// defaulting all optional fields.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        state: ServiceState,
+        backend: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            state,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            uptime_secs: None,
+            restart_count: 0,
+            health: HealthState::Unknown,
+            backend: backend.into(),
+            memory_bytes: None,
+            cpu_usage_percent: None,
+        }
+    }
+
+    /// Set the PID on this status (builder pattern).
+    #[must_use]
+    pub fn with_pid(mut self, pid: u32) -> Self {
+        self.pid = Some(pid);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +197,25 @@ mod tests {
             let parsed: ServiceState = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(parsed, state);
         }
+    }
+
+    #[test]
+    fn new_constructor_defaults() {
+        let status = ServiceStatus::new("test-svc", ServiceState::Running, "native");
+        assert_eq!(status.name, "test-svc");
+        assert_eq!(status.state, ServiceState::Running);
+        assert_eq!(status.backend, "native");
+        assert!(status.pid.is_none());
+        assert!(status.exit_code.is_none());
+        assert_eq!(status.restart_count, 0);
+        assert_eq!(status.health, HealthState::Unknown);
+        assert!(status.memory_bytes.is_none());
+    }
+
+    #[test]
+    fn with_pid_builder() {
+        let status = ServiceStatus::new("test", ServiceState::Running, "native")
+            .with_pid(12345);
+        assert_eq!(status.pid, Some(12345));
     }
 }

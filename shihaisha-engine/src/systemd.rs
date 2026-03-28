@@ -446,54 +446,28 @@ impl InitBackend for SystemdBackend {
 
 /// Check if the current process is running as root.
 fn is_root() -> bool {
-    // Check for /run/systemd/system as an indicator of system mode capability
-    // rather than using libc. Also check EUID env if available.
-    std::path::Path::new("/run/systemd/system").exists()
-        && std::env::var("SUDO_USER").is_ok()
+    crate::util::is_root()
 }
 
 /// Get the user's home directory.
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    crate::util::home_dir()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shihaisha_core::{
-        BackendOverrides, DependencySpec, LoggingSpec, ResourceLimits, RestartPolicy,
-    };
+    use shihaisha_core::ResourceLimits;
 
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "test-svc".to_owned(),
-            description: "Test service".to_owned(),
-            command: "/usr/bin/test-app".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+    fn test_spec() -> ServiceSpec {
+        let mut spec = ServiceSpec::new("test-svc", "/usr/bin/test-app");
+        spec.description = "Test service".to_owned();
+        spec
     }
 
     #[test]
     fn unit_generation_minimal() {
-        let spec = minimal_spec();
+        let spec = test_spec();
         let unit = spec_to_unit(&spec);
 
         assert!(unit.contains("[Unit]"));
@@ -511,7 +485,7 @@ mod tests {
 
     #[test]
     fn unit_generation_with_deps_and_env() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.depends_on.after = vec!["database".to_owned()];
         spec.depends_on.requires = vec!["database".to_owned()];
         spec.depends_on.conflicts = vec!["legacy-app".to_owned()];
@@ -546,7 +520,7 @@ mod tests {
         ];
 
         for (strategy, expected) in strategies {
-            let mut spec = minimal_spec();
+            let mut spec = test_spec();
             spec.restart.strategy = strategy;
             let unit = spec_to_unit(&spec);
             assert!(
@@ -566,7 +540,7 @@ mod tests {
         ];
 
         for (svc_type, expected) in types {
-            let mut spec = minimal_spec();
+            let mut spec = test_spec();
             spec.service_type = svc_type;
             let unit = spec_to_unit(&spec);
             assert!(
@@ -578,7 +552,7 @@ mod tests {
 
     #[test]
     fn resource_limits_in_unit() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: Some("512M".to_owned()),
             memory_high: Some("384M".to_owned()),
@@ -602,7 +576,7 @@ mod tests {
 
     #[test]
     fn notify_and_watchdog() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.notify = true;
         spec.watchdog_sec = 30;
 
@@ -614,7 +588,7 @@ mod tests {
 
     #[test]
     fn backend_overrides_applied() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         let mut svc_overrides = HashMap::new();
         svc_overrides.insert("LimitNOFILE".to_owned(), "65536".to_owned());
         svc_overrides.insert("ProtectHome".to_owned(), "yes".to_owned());
@@ -628,7 +602,7 @@ mod tests {
 
     #[test]
     fn exec_start_with_args() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.args = vec!["--port".to_owned(), "8080".to_owned(), "--verbose".to_owned()];
 
         let unit = spec_to_unit(&spec);
@@ -663,7 +637,7 @@ MemoryCurrent=104857600
 
     #[test]
     fn logging_file_targets_in_unit() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.logging.stdout = LogTarget::File(PathBuf::from("/var/log/app/stdout.log"));
         spec.logging.stderr = LogTarget::Null;
 

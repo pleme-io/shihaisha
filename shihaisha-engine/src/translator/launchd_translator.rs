@@ -38,38 +38,13 @@ impl ConfigTranslator for LaunchdTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shihaisha_core::*;
-    use std::collections::HashMap;
-
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "com.test.myapp".to_owned(),
-            description: "Test".to_owned(),
-            command: "/usr/local/bin/myapp".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
-    }
+    use shihaisha_core::ServiceSpec;
 
     #[test]
     fn translate_produces_xml() {
+        let spec = ServiceSpec::new("com.test.myapp", "/usr/local/bin/myapp");
         let translator = LaunchdTranslator;
-        let result = translator.translate(&minimal_spec()).expect("translate");
+        let result = translator.translate(&spec).expect("translate");
         assert!(result.contains("com.test.myapp"));
         assert!(result.contains("ProgramArguments"));
     }

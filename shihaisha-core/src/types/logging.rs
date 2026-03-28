@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Logging configuration for a service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingSpec {
     /// Where to send stdout output.
     #[serde(default)]
@@ -23,7 +23,7 @@ impl Default for LoggingSpec {
 }
 
 /// Where to direct log output.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogTarget {
     /// Send to the system journal (journald on Linux, os_log on macOS).

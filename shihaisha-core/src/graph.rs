@@ -163,38 +163,16 @@ pub fn validate_references(specs: &[ServiceSpec]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::backend_overrides::BackendOverrides;
-    use crate::types::logging::LoggingSpec;
-    use crate::types::service_spec::{DependencySpec, RestartPolicy, ServiceType};
-    use std::collections::HashMap;
+    use crate::types::service_spec::DependencySpec;
 
     fn spec_with_deps(name: &str, deps: DependencySpec) -> ServiceSpec {
-        ServiceSpec {
-            name: name.to_owned(),
-            description: String::new(),
-            command: "/usr/bin/test".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: deps,
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+        let mut spec = ServiceSpec::new(name, "/usr/bin/test");
+        spec.depends_on = deps;
+        spec
     }
 
     fn no_deps(name: &str) -> ServiceSpec {
-        spec_with_deps(name, DependencySpec::default())
+        ServiceSpec::new(name, "/usr/bin/test")
     }
 
     #[test]

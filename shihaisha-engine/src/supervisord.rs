@@ -340,47 +340,23 @@ impl InitBackend for SupervisordBackend {
 
 /// Get the user's home directory.
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    crate::util::home_dir()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shihaisha_core::{
-        BackendOverrides, DependencySpec, LoggingSpec, ResourceLimits, RestartPolicy,
-    };
-    use std::collections::HashMap;
+    use shihaisha_core::ResourceLimits;
 
-    fn minimal_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "test-svc".to_owned(),
-            description: "Test service".to_owned(),
-            command: "/usr/bin/test-app".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+    fn test_spec() -> ServiceSpec {
+        let mut spec = ServiceSpec::new("test-svc", "/usr/bin/test-app");
+        spec.description = "Test service".to_owned();
+        spec
     }
 
     #[test]
     fn conf_generation_basic() {
-        let spec = minimal_spec();
+        let spec = test_spec();
         let conf = spec_to_conf(&spec);
 
         assert!(conf.contains("[program:test-svc]"));
@@ -394,7 +370,7 @@ mod tests {
 
     #[test]
     fn conf_restart_always() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::Always;
         let conf = spec_to_conf(&spec);
 
@@ -406,7 +382,7 @@ mod tests {
 
     #[test]
     fn conf_restart_on_failure() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::OnFailure;
         let conf = spec_to_conf(&spec);
 
@@ -418,7 +394,7 @@ mod tests {
 
     #[test]
     fn conf_restart_never() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::Never;
         let conf = spec_to_conf(&spec);
 
@@ -430,7 +406,7 @@ mod tests {
 
     #[test]
     fn conf_restart_on_success() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.strategy = RestartStrategy::OnSuccess;
         let conf = spec_to_conf(&spec);
 
@@ -442,7 +418,7 @@ mod tests {
 
     #[test]
     fn conf_environment() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.environment
             .insert("RUST_LOG".to_owned(), "info".to_owned());
 
@@ -460,7 +436,7 @@ mod tests {
 
     #[test]
     fn conf_with_working_directory() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.working_directory = Some(PathBuf::from("/var/www"));
 
         let conf = spec_to_conf(&spec);
@@ -473,7 +449,7 @@ mod tests {
 
     #[test]
     fn conf_with_user() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.user = Some("www-data".to_owned());
 
         let conf = spec_to_conf(&spec);
@@ -486,7 +462,7 @@ mod tests {
 
     #[test]
     fn conf_oneshot_no_autostart() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.service_type = ServiceType::Oneshot;
 
         let conf = spec_to_conf(&spec);
@@ -499,7 +475,7 @@ mod tests {
 
     #[test]
     fn conf_with_args() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.args = vec!["--port".to_owned(), "8080".to_owned(), "--verbose".to_owned()];
 
         let conf = spec_to_conf(&spec);
@@ -509,7 +485,7 @@ mod tests {
 
     #[test]
     fn conf_priority_from_nice() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.resources = Some(ResourceLimits {
             memory_max: None,
             memory_high: None,
@@ -530,7 +506,7 @@ mod tests {
 
     #[test]
     fn conf_logging_file_stdout() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.logging.stdout = LogTarget::File(PathBuf::from("/var/log/app/stdout.log"));
 
         let conf = spec_to_conf(&spec);
@@ -540,7 +516,7 @@ mod tests {
 
     #[test]
     fn conf_logging_null_stderr() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.logging.stderr = LogTarget::Null;
 
         let conf = spec_to_conf(&spec);
@@ -550,7 +526,7 @@ mod tests {
 
     #[test]
     fn conf_max_retries_custom() {
-        let mut spec = minimal_spec();
+        let mut spec = test_spec();
         spec.restart.max_retries = 10;
 
         let conf = spec_to_conf(&spec);

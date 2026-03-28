@@ -72,15 +72,36 @@ impl HealthChecker for DefaultHealthChecker {
 }
 
 async fn check_http(endpoint: &str) -> std::io::Result<bool> {
-    // Parse the URL to extract host:port
+    // Parse the URL to extract host:port and path
     let url = endpoint
         .trim_start_matches("http://")
         .trim_start_matches("https://");
-    let (host_port, _path) = url.split_once('/').unwrap_or((url, ""));
+    let (host_port, path) = url.split_once('/').unwrap_or((url, ""));
+    let path = format!("/{path}");
 
-    let stream = TcpStream::connect(host_port).await?;
-    drop(stream);
-    Ok(true)
+    let mut stream = TcpStream::connect(host_port).await?;
+
+    // Send a minimal HTTP/1.1 HEAD request
+    let host = host_port.split(':').next().unwrap_or(host_port);
+    let request = format!("HEAD {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    stream.write_all(request.as_bytes()).await?;
+
+    // Read the response status line
+    let mut buf = vec![0u8; 1024];
+    let n = stream.read(&mut buf).await?;
+    let response = String::from_utf8_lossy(&buf[..n]);
+
+    // Check for HTTP/1.x 2xx or 3xx status
+    if let Some(status_line) = response.lines().next() {
+        if let Some(code_str) = status_line.split_whitespace().nth(1) {
+            if let Ok(code) = code_str.parse::<u16>() {
+                return Ok((200..400).contains(&code));
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]

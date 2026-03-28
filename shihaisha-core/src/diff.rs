@@ -132,49 +132,25 @@ fn diff_values(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::backend_overrides::BackendOverrides;
-    use crate::types::logging::LoggingSpec;
-    use crate::types::service_spec::{
-        DependencySpec, RestartPolicy, RestartStrategy, ServiceType,
-    };
-    use std::collections::HashMap;
+    use crate::types::service_spec::RestartStrategy;
 
-    fn minimal_spec(name: &str) -> ServiceSpec {
-        ServiceSpec {
-            name: name.to_owned(),
-            description: "Test service".to_owned(),
-            command: "/usr/bin/test".to_owned(),
-            args: vec![],
-            service_type: ServiceType::Simple,
-            working_directory: None,
-            user: None,
-            group: None,
-            environment: HashMap::new(),
-            restart: RestartPolicy::default(),
-            depends_on: DependencySpec::default(),
-            health: None,
-            sockets: vec![],
-            resources: None,
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+    fn test_spec(name: &str) -> ServiceSpec {
+        let mut spec = ServiceSpec::new(name, "/usr/bin/test");
+        spec.description = "Test service".to_owned();
+        spec
     }
 
     #[test]
     fn no_changes() {
-        let spec = minimal_spec("test");
+        let spec = test_spec("test");
         let changes = diff(&spec, &spec);
         assert!(changes.is_empty(), "identical specs should produce no diff");
     }
 
     #[test]
     fn name_changed() {
-        let old = minimal_spec("old-name");
-        let new = minimal_spec("new-name");
+        let old = test_spec("old-name");
+        let new = test_spec("new-name");
         let changes = diff(&old, &new);
 
         let name_change = changes
@@ -193,8 +169,8 @@ mod tests {
 
     #[test]
     fn env_added() {
-        let old = minimal_spec("test");
-        let mut new = minimal_spec("test");
+        let old = test_spec("test");
+        let mut new = test_spec("test");
         new.environment
             .insert("NEW_VAR".to_owned(), "value".to_owned());
 
@@ -217,10 +193,10 @@ mod tests {
 
     #[test]
     fn env_removed() {
-        let mut old = minimal_spec("test");
+        let mut old = test_spec("test");
         old.environment
             .insert("OLD_VAR".to_owned(), "gone".to_owned());
-        let new = minimal_spec("test");
+        let new = test_spec("test");
 
         let changes = diff(&old, &new);
 
@@ -241,8 +217,8 @@ mod tests {
 
     #[test]
     fn nested_change() {
-        let old = minimal_spec("test");
-        let mut new = minimal_spec("test");
+        let old = test_spec("test");
+        let mut new = test_spec("test");
         new.restart.strategy = RestartStrategy::Always;
 
         let changes = diff(&old, &new);
@@ -265,8 +241,8 @@ mod tests {
 
     #[test]
     fn multiple_changes() {
-        let old = minimal_spec("test");
-        let mut new = minimal_spec("test");
+        let old = test_spec("test");
+        let mut new = test_spec("test");
         new.description = "Updated description".to_owned();
         new.command = "/usr/bin/updated".to_owned();
         new.notify = true;
@@ -298,8 +274,8 @@ mod tests {
 
     #[test]
     fn deterministic_ordering() {
-        let old = minimal_spec("test");
-        let mut new = minimal_spec("test");
+        let old = test_spec("test");
+        let mut new = test_spec("test");
         new.description = "Changed".to_owned();
         new.command = "/changed".to_owned();
 
@@ -311,8 +287,8 @@ mod tests {
 
     #[test]
     fn args_array_change() {
-        let old = minimal_spec("test");
-        let mut new = minimal_spec("test");
+        let old = test_spec("test");
+        let mut new = test_spec("test");
         new.args = vec!["--flag".to_owned()];
 
         let changes = diff(&old, &new);

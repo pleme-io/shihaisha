@@ -34,3 +34,4 @@ plist = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }
+shihaisha-core = { workspace = true, features = ["test-support"] }

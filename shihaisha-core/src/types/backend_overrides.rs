@@ -5,7 +5,7 @@ use std::collections::HashMap;
 ///
 /// These allow users to inject raw directives into the backend-native config
 /// when the canonical `ServiceSpec` does not cover a specific feature.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct BackendOverrides {
     /// Raw systemd unit directives to add, keyed by section
     /// (e.g., `{"Service": {"LimitNOFILE": "65536"}}`).

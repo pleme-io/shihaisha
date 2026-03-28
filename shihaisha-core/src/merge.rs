@@ -219,101 +219,73 @@ mod tests {
     use std::path::PathBuf;
 
     fn base_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "base-svc".to_owned(),
-            description: "Base service".to_owned(),
-            command: "/usr/bin/base".to_owned(),
-            args: vec!["--verbose".to_owned()],
-            service_type: ServiceType::Simple,
-            working_directory: Some(PathBuf::from("/var/base")),
-            user: Some("baseuser".to_owned()),
-            group: None,
-            environment: {
-                let mut m = HashMap::new();
-                m.insert("RUST_LOG".to_owned(), "info".to_owned());
-                m.insert("PORT".to_owned(), "8080".to_owned());
-                m
-            },
-            restart: RestartPolicy {
-                strategy: RestartStrategy::OnFailure,
-                delay_secs: 5,
-                max_retries: 3,
-                reset_after_secs: 300,
-            },
-            depends_on: DependencySpec {
-                after: vec!["database".to_owned()],
-                before: vec![],
-                requires: vec!["database".to_owned()],
-                wants: vec![],
-                conflicts: vec![],
-            },
-            health: None,
-            sockets: vec![],
-            resources: Some(ResourceLimits {
-                memory_max: Some("512M".to_owned()),
-                memory_high: None,
-                cpu_weight: None,
-                cpu_quota: None,
-                tasks_max: Some(256),
-                io_weight: None,
-                nice: None,
-            }),
-            logging: LoggingSpec::default(),
-            notify: false,
-            watchdog_sec: 0,
-            timeout_start_sec: 90,
-            timeout_stop_sec: 90,
-            overrides: BackendOverrides::default(),
-        }
+        let mut spec = ServiceSpec::new("base-svc", "/usr/bin/base");
+        spec.description = "Base service".to_owned();
+        spec.args = vec!["--verbose".to_owned()];
+        spec.working_directory = Some(PathBuf::from("/var/base"));
+        spec.user = Some("baseuser".to_owned());
+        spec.environment.insert("RUST_LOG".to_owned(), "info".to_owned());
+        spec.environment.insert("PORT".to_owned(), "8080".to_owned());
+        spec.restart = RestartPolicy {
+            strategy: RestartStrategy::OnFailure,
+            delay_secs: 5,
+            max_retries: 3,
+            reset_after_secs: 300,
+        };
+        spec.depends_on = DependencySpec {
+            after: vec!["database".to_owned()],
+            before: vec![],
+            requires: vec!["database".to_owned()],
+            wants: vec![],
+            conflicts: vec![],
+        };
+        spec.resources = Some(ResourceLimits {
+            memory_max: Some("512M".to_owned()),
+            memory_high: None,
+            cpu_weight: None,
+            cpu_quota: None,
+            tasks_max: Some(256),
+            io_weight: None,
+            nice: None,
+        });
+        spec
     }
 
     fn overlay_spec() -> ServiceSpec {
-        ServiceSpec {
-            name: "overlay-svc".to_owned(),
-            description: "Overlay service".to_owned(),
-            command: "/usr/bin/overlay".to_owned(),
-            args: vec!["--debug".to_owned()],
-            service_type: ServiceType::Notify,
-            working_directory: None,
-            user: None,
-            group: Some("overlaygroup".to_owned()),
-            environment: {
-                let mut m = HashMap::new();
-                m.insert("RUST_LOG".to_owned(), "debug".to_owned());
-                m.insert("NEW_VAR".to_owned(), "hello".to_owned());
-                m
-            },
-            restart: RestartPolicy {
-                strategy: RestartStrategy::Always,
-                delay_secs: 10,
-                max_retries: 5,
-                reset_after_secs: 600,
-            },
-            depends_on: DependencySpec {
-                after: vec!["cache".to_owned()],
-                before: vec![],
-                requires: vec![],
-                wants: vec!["metrics".to_owned()],
-                conflicts: vec![],
-            },
-            health: None,
-            sockets: vec![],
-            resources: Some(ResourceLimits {
-                memory_max: Some("1G".to_owned()),
-                memory_high: None,
-                cpu_weight: Some(500),
-                cpu_quota: None,
-                tasks_max: None,
-                io_weight: None,
-                nice: Some(-5),
-            }),
-            logging: LoggingSpec::default(),
-            notify: true,
-            watchdog_sec: 30,
-            timeout_start_sec: 120,
-            timeout_stop_sec: 60,
-            overrides: BackendOverrides::default(),
-        }
+        let mut spec = ServiceSpec::new("overlay-svc", "/usr/bin/overlay");
+        spec.description = "Overlay service".to_owned();
+        spec.args = vec!["--debug".to_owned()];
+        spec.service_type = ServiceType::Notify;
+        spec.group = Some("overlaygroup".to_owned());
+        spec.environment.insert("RUST_LOG".to_owned(), "debug".to_owned());
+        spec.environment.insert("NEW_VAR".to_owned(), "hello".to_owned());
+        spec.restart = RestartPolicy {
+            strategy: RestartStrategy::Always,
+            delay_secs: 10,
+            max_retries: 5,
+            reset_after_secs: 600,
+        };
+        spec.depends_on = DependencySpec {
+            after: vec!["cache".to_owned()],
+            before: vec![],
+            requires: vec![],
+            wants: vec!["metrics".to_owned()],
+            conflicts: vec![],
+        };
+        spec.resources = Some(ResourceLimits {
+            memory_max: Some("1G".to_owned()),
+            memory_high: None,
+            cpu_weight: Some(500),
+            cpu_quota: None,
+            tasks_max: None,
+            io_weight: None,
+            nice: Some(-5),
+        });
+        spec.notify = true;
+        spec.watchdog_sec = 30;
+        spec.timeout_start_sec = 120;
+        spec.timeout_stop_sec = 60;
+        spec
     }
 
     #[test]

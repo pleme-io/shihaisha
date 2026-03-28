@@ -1,4 +1,5 @@
 pub mod registry;
+pub mod util;
 
 #[cfg(feature = "systemd")]
 pub mod systemd;

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Socket activation specification (maps to systemd `.socket` units /
 /// launchd `Sockets`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SocketSpec {
     /// Listen address (e.g., `"127.0.0.1:8080"` or `"/run/myservice.sock"`).
     pub listen: String,

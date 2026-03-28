@@ -11,6 +11,10 @@ categories = ["os"]
 keywords = ["service-manager", "systemd", "launchd", "init"]
 publish = true
 
+[features]
+default = []
+test-support = ["dep:tokio"]
+
 [lints]
 workspace = true
 
@@ -22,6 +26,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
