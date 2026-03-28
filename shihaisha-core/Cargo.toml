@@ -1,0 +1,27 @@
+[package]
+name = "shihaisha-core"
+description = "Core types and traits for shihaisha service management"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+homepage = "https://github.com/pleme-io/shihaisha"
+repository = "https://github.com/pleme-io/shihaisha"
+categories = ["os"]
+keywords = ["service-manager", "systemd", "launchd", "init"]
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

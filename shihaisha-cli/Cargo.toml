@@ -1,0 +1,30 @@
+[package]
+name = "shihaisha-cli"
+description = "CLI for shihaisha unified service management"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+homepage = "https://github.com/pleme-io/shihaisha"
+repository = "https://github.com/pleme-io/shihaisha"
+publish = true
+
+[[bin]]
+name = "shihaisha"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+shihaisha-core = { workspace = true }
+shihaisha-engine = { workspace = true, features = ["native", "launchd"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }

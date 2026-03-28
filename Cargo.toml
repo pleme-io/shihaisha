@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = [
+    "shihaisha-core",
+    "shihaisha-engine",
+    "shihaisha-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+homepage = "https://github.com/pleme-io/shihaisha"
+repository = "https://github.com/pleme-io/shihaisha"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+
+[workspace.dependencies]
+# Workspace crates
+shihaisha-core = { path = "shihaisha-core" }
+shihaisha-engine = { path = "shihaisha-engine" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+toml = "0.8"
+plist = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "signal", "process", "time", "io-util", "fs"] }
+async-trait = "0.1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Testing
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true
