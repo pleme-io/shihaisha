@@ -104,6 +104,11 @@ impl HealthChecker for DefaultHealthChecker {
                     message,
                 })
             }
+            _ => Ok(HealthCheckResult {
+                healthy: false,
+                latency: start.elapsed(),
+                message: Some("unsupported health check type".to_owned()),
+            }),
         }
     }
 

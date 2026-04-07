@@ -134,6 +134,7 @@ fn emit_service_section(unit: &mut String, spec: &ServiceSpec) {
         ServiceType::Oneshot => "oneshot",
         ServiceType::Notify => "notify",
         ServiceType::Forking => "forking",
+        _ => "simple",
     };
     let _ = writeln!(unit, "Type={svc_type}");
 
@@ -148,6 +149,7 @@ fn emit_service_section(unit: &mut String, spec: &ServiceSpec) {
         RestartStrategy::OnFailure => "on-failure",
         RestartStrategy::OnSuccess => "on-success",
         RestartStrategy::Never => "no",
+        _ => "on-failure",
     };
     let _ = writeln!(unit, "Restart={restart}");
     let _ = writeln!(unit, "RestartSec={}", spec.restart.delay_secs);
@@ -197,7 +199,7 @@ fn emit_log_target(unit: &mut String, directive: &str, target: &LogTarget) {
         LogTarget::Null => {
             let _ = writeln!(unit, "{directive}=null");
         }
-        LogTarget::Inherit => {
+        LogTarget::Inherit | _ => {
             let _ = writeln!(unit, "{directive}=inherit");
         }
     }

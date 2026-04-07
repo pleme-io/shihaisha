@@ -49,6 +49,7 @@ pub struct ServiceStatus {
 /// Process lifecycle state of a service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ServiceState {
     /// Not started / not loaded.
     Inactive,
@@ -73,6 +74,7 @@ pub enum ServiceState {
 /// High-level phase (Kubernetes-style summary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ServicePhase {
     /// Waiting to start.
     Pending,
@@ -132,6 +134,7 @@ impl fmt::Display for ServiceState {
 /// Health state of a service (separate from process state).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum HealthState {
     /// Health state not yet determined.
     #[default]

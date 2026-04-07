@@ -1,5 +1,6 @@
 /// Errors that can occur in shihaisha service management.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Service with the given name was not found.
     #[error("service not found: {0}")]

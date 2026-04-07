@@ -26,6 +26,7 @@ impl Default for LoggingSpec {
 /// Where to direct log output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LogTarget {
     /// Send to the system journal (`journald` on Linux, `os_log` on macOS).
     #[default]

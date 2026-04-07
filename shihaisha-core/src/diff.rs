@@ -16,6 +16,7 @@ use crate::types::service_spec::ServiceSpec;
 
 /// A single structural change between two specs.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Change {
     /// A field or key was added (exists in new but not old).
     Added {

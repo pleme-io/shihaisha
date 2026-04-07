@@ -87,7 +87,7 @@ impl NativeBackend {
             LogTarget::File(path) => {
                 cmd.stdout(open_log_file(path, "stdout")?);
             }
-            LogTarget::Journal | LogTarget::Inherit => {
+            LogTarget::Journal | LogTarget::Inherit | _ => {
                 cmd.stdout(std::process::Stdio::inherit());
             }
         }
@@ -99,7 +99,7 @@ impl NativeBackend {
             LogTarget::File(path) => {
                 cmd.stderr(open_log_file(path, "stderr")?);
             }
-            LogTarget::Journal | LogTarget::Inherit => {
+            LogTarget::Journal | LogTarget::Inherit | _ => {
                 cmd.stderr(std::process::Stdio::inherit());
             }
         }
@@ -155,6 +155,7 @@ fn spawn_process_watcher(
                 RestartStrategy::OnFailure => exit_code != 0,
                 RestartStrategy::OnSuccess => exit_code == 0,
                 RestartStrategy::Never => false,
+                _ => exit_code != 0,
             };
 
             let within_retries = max_retries == 0 || svc_state.restart_count < max_retries;

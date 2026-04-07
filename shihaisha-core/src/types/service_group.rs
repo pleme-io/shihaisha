@@ -6,6 +6,7 @@ use std::fmt;
 /// Inspired by Erlang OTP supervision trees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum GroupRestartStrategy {
     /// Restart only the failed service (default).
     #[default]

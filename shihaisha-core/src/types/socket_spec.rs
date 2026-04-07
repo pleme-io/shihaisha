@@ -19,6 +19,7 @@ pub struct SocketSpec {
 /// Type of socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SocketType {
     /// TCP / Unix stream socket (default).
     #[default]

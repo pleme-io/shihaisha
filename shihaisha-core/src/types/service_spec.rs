@@ -115,6 +115,7 @@ fn default_timeout() -> u64 {
 /// Type of service (maps to systemd Type= / launchd `KeepAlive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ServiceType {
     /// Long-running process (default).
     #[default]
@@ -186,6 +187,7 @@ impl Default for RestartPolicy {
 /// When to restart the service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum RestartStrategy {
     /// Always restart regardless of exit code.
     Always,
@@ -212,6 +214,7 @@ impl fmt::Display for RestartStrategy {
 /// Condition that must be met before a dependency is considered satisfied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DependencyCondition {
     /// Dependency process has started (default).
     #[default]

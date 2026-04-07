@@ -16,6 +16,7 @@ pub struct HealthCheckResult {
 /// Health check specification — determines how to verify a service is healthy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum HealthCheckSpec {
     /// HTTP endpoint health check.
     Http {
