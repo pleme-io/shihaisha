@@ -263,7 +263,57 @@ mod tests {
         };
         let result = checker.check(&spec).await.expect("check");
         assert!(result.healthy);
-        // File checks are fast, but latency should still be measured
         assert!(result.latency.as_secs() < 5, "file check should be fast");
+    }
+
+    #[tokio::test]
+    async fn command_health_check_spawn_failure() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::Command {
+            command: "/nonexistent/binary/path".to_owned(),
+            args: vec![],
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(!result.healthy);
+        assert!(result.message.as_ref().unwrap().contains("command failed"));
+    }
+
+    #[tokio::test]
+    async fn command_health_check_with_args() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::Command {
+            command: "test".to_owned(),
+            args: vec!["-d".to_owned(), "/tmp".to_owned()],
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(result.healthy, "/tmp should be a directory");
+    }
+
+    #[tokio::test]
+    async fn command_health_check_nonzero_exit_has_code() {
+        let checker = DefaultHealthChecker::new();
+        let spec = HealthCheckSpec::Command {
+            command: "sh".to_owned(),
+            args: vec!["-c".to_owned(), "exit 42".to_owned()],
+            interval_secs: 5,
+            max_failures: 1,
+        };
+        let result = checker.check(&spec).await.expect("check");
+        assert!(!result.healthy);
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains("42"),
+            "should include exit code: {msg}"
+        );
+    }
+
+    #[test]
+    fn default_health_checker_default_trait() {
+        let checker = DefaultHealthChecker::default();
+        assert_eq!(checker.name(), "default");
     }
 }

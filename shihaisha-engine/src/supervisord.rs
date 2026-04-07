@@ -659,4 +659,110 @@ mod tests {
         let backend = SupervisordBackend::new();
         assert_eq!(InitBackend::name(&backend), "supervisord");
     }
+
+    #[test]
+    fn conf_logging_journal_uses_auto() {
+        let spec = test_spec();
+        let conf = spec_to_conf(&spec);
+        assert!(
+            conf.contains("stdout_logfile=AUTO"),
+            "Journal logging should map to AUTO: {conf}"
+        );
+    }
+
+    #[test]
+    fn conf_logging_inherit_uses_redirect() {
+        let mut spec = test_spec();
+        spec.logging.stdout = LogTarget::Inherit;
+        spec.logging.stderr = LogTarget::Inherit;
+        let conf = spec_to_conf(&spec);
+        assert!(
+            conf.contains("redirect_stderr=true"),
+            "Inherit logging should set redirect_stderr"
+        );
+    }
+
+    #[test]
+    fn conf_logging_file_stderr() {
+        let mut spec = test_spec();
+        spec.logging.stderr = LogTarget::File(PathBuf::from("/var/log/err.log"));
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("stderr_logfile=/var/log/err.log"));
+    }
+
+    #[test]
+    fn conf_logging_null_stdout() {
+        let mut spec = test_spec();
+        spec.logging.stdout = LogTarget::Null;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("stdout_logfile=/dev/null"));
+    }
+
+    #[test]
+    fn parse_state_stopping_maps_to_unknown() {
+        assert_eq!(
+            parse_supervisord_state("test-svc    STOPPING"),
+            ServiceState::Unknown,
+            "supervisord STOPPING falls through to Unknown (not modeled)"
+        );
+    }
+
+    #[test]
+    fn parse_state_empty_string() {
+        assert_eq!(
+            parse_supervisord_state(""),
+            ServiceState::Unknown
+        );
+    }
+
+    #[test]
+    fn conf_stop_wait_from_timeout() {
+        let mut spec = test_spec();
+        spec.timeout_stop_sec = 120;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("stopwaitsecs=120"));
+    }
+
+    #[test]
+    fn conf_delay_secs_maps_to_startsecs() {
+        let mut spec = test_spec();
+        spec.restart.delay_secs = 15;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("startsecs=15"));
+    }
+
+    #[test]
+    fn config_emitter_extension_is_conf() {
+        let backend = SupervisordBackend::new();
+        assert_eq!(ConfigEmitter::extension(&backend), "conf");
+        assert_eq!(ConfigEmitter::name(&backend), "supervisord");
+    }
+
+    #[test]
+    fn conf_no_resources_omits_priority() {
+        let mut spec = test_spec();
+        spec.resources = None;
+        let conf = spec_to_conf(&spec);
+        assert!(
+            !conf.contains("priority="),
+            "no resources should not add priority"
+        );
+    }
+
+    #[test]
+    fn conf_resources_without_nice_omits_priority() {
+        let spec_with_mem = {
+            let mut spec = test_spec();
+            spec.resources = Some(ResourceLimits {
+                memory_max: Some(shihaisha_core::MemorySize::parse("1G").unwrap()),
+                ..ResourceLimits::default()
+            });
+            spec
+        };
+        let conf = spec_to_conf(&spec_with_mem);
+        assert!(
+            !conf.contains("priority="),
+            "resources without nice should not add priority"
+        );
+    }
 }

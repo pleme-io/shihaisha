@@ -192,4 +192,83 @@ endpoint: http://localhost:3000/ready
             assert_eq!(yaml, reparsed_yaml);
         }
     }
+
+    #[test]
+    fn health_check_result_construction() {
+        let result = HealthCheckResult {
+            healthy: true,
+            latency: Duration::from_millis(42),
+            message: None,
+        };
+        assert!(result.healthy);
+        assert_eq!(result.latency, Duration::from_millis(42));
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn health_check_result_unhealthy_with_message() {
+        let result = HealthCheckResult {
+            healthy: false,
+            latency: Duration::from_secs(5),
+            message: Some("connection refused".to_owned()),
+        };
+        assert!(!result.healthy);
+        assert_eq!(result.latency, Duration::from_secs(5));
+        assert_eq!(result.message.as_deref(), Some("connection refused"));
+    }
+
+    #[test]
+    fn health_check_result_clone_and_eq() {
+        let result = HealthCheckResult {
+            healthy: true,
+            latency: Duration::from_millis(10),
+            message: Some("ok".to_owned()),
+        };
+        let cloned = result.clone();
+        assert_eq!(result, cloned);
+    }
+
+    #[test]
+    fn tcp_health_check_defaults_from_yaml() {
+        let yaml = r#"
+type: tcp
+address: 127.0.0.1:5432
+"#;
+        let check: HealthCheckSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        match check {
+            HealthCheckSpec::Tcp {
+                address,
+                interval_secs,
+                max_failures,
+            } => {
+                assert_eq!(address, "127.0.0.1:5432");
+                assert_eq!(interval_secs, 30);
+                assert_eq!(max_failures, 3);
+            }
+            _ => panic!("expected Tcp variant"),
+        }
+    }
+
+    #[test]
+    fn command_health_check_defaults_from_yaml() {
+        let yaml = r#"
+type: command
+command: /usr/bin/check
+"#;
+        let check: HealthCheckSpec = serde_yaml_ng::from_str(yaml).expect("parse");
+        match check {
+            HealthCheckSpec::Command {
+                command,
+                args,
+                interval_secs,
+                max_failures,
+            } => {
+                assert_eq!(command, "/usr/bin/check");
+                assert!(args.is_empty());
+                assert_eq!(interval_secs, 30);
+                assert_eq!(max_failures, 3);
+            }
+            _ => panic!("expected Command variant"),
+        }
+    }
 }

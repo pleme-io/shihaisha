@@ -1052,4 +1052,167 @@ com.test.myapp = {
             Some("/dev/null")
         );
     }
+
+    #[test]
+    fn keepalive_mapping_on_success() {
+        let mut spec = test_spec();
+        spec.restart.strategy = RestartStrategy::OnSuccess;
+        let dict = spec_to_plist(&spec);
+        let keepalive = dict
+            .get("KeepAlive")
+            .and_then(|v| v.as_dictionary())
+            .expect("OnSuccess should produce KeepAlive dict");
+        assert_eq!(
+            keepalive.get("Crashed").and_then(|v| v.as_boolean()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn keepalive_mapping_never_simple() {
+        let mut spec = test_spec();
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.service_type = ServiceType::Simple;
+        let dict = spec_to_plist(&spec);
+        assert!(
+            dict.get("KeepAlive").is_none(),
+            "Never+Simple should not set KeepAlive"
+        );
+    }
+
+    #[test]
+    fn logging_inherit_uses_fallback_path() {
+        let mut spec = test_spec();
+        spec.logging.stdout = LogTarget::Inherit;
+        spec.logging.stderr = LogTarget::Inherit;
+        let dict = spec_to_plist(&spec);
+        let stdout = dict
+            .get("StandardOutPath")
+            .and_then(|v| v.as_string())
+            .expect("inherit should set a stdout path");
+        assert!(
+            stdout.contains("com.test.myapp.stdout.log"),
+            "stdout: {stdout}"
+        );
+        let stderr = dict
+            .get("StandardErrorPath")
+            .and_then(|v| v.as_string())
+            .expect("inherit should set a stderr path");
+        assert!(
+            stderr.contains("com.test.myapp.stderr.log"),
+            "stderr: {stderr}"
+        );
+    }
+
+    #[test]
+    fn logging_journal_omits_paths() {
+        let spec = test_spec();
+        let dict = spec_to_plist(&spec);
+        assert!(
+            dict.get("StandardOutPath").is_none(),
+            "journal should not set stdout path"
+        );
+        assert!(
+            dict.get("StandardErrorPath").is_none(),
+            "journal should not set stderr path"
+        );
+    }
+
+    #[test]
+    fn resource_limits_mid_cpu_weight() {
+        use shihaisha_core::types::resource_limits::Weight;
+        let mut spec = test_spec();
+        spec.resources = Some(ResourceLimits {
+            cpu_weight: Some(Weight::new(500).unwrap()),
+            ..ResourceLimits::default()
+        });
+        let dict = spec_to_plist(&spec);
+        assert_eq!(
+            dict.get("ProcessType").and_then(|v| v.as_string()),
+            Some("Standard"),
+            "mid-range CPU weight should map to Standard"
+        );
+    }
+
+    #[test]
+    fn parse_launchctl_print_waiting() {
+        let output = r"
+com.test.myapp = {
+    state = waiting
+    last exit code = 0
+}
+";
+        let (state, pid, exit_code) = parse_launchctl_print(output);
+        assert_eq!(state, ServiceState::Inactive);
+        assert!(pid.is_none());
+        assert_eq!(exit_code, Some(0));
+    }
+
+    #[test]
+    fn parse_launchctl_print_empty_input() {
+        let (state, pid, exit_code) = parse_launchctl_print("");
+        assert_eq!(state, ServiceState::Unknown);
+        assert!(pid.is_none());
+        assert!(exit_code.is_none());
+    }
+
+    #[test]
+    fn parse_launchctl_print_pid_zero_filtered() {
+        let output = r"
+com.test.myapp = {
+    state = running
+    pid = 0
+    last exit code = 0
+}
+";
+        let (_state, pid, _exit_code) = parse_launchctl_print(output);
+        assert!(
+            pid.is_none(),
+            "pid=0 should be filtered out"
+        );
+    }
+
+    #[test]
+    fn available_returns_false_on_non_macos() {
+        if !cfg!(target_os = "macos") {
+            let backend = LaunchdBackend::new();
+            assert!(!backend.available(), "launchd should not be available on non-macOS");
+        }
+    }
+
+    #[test]
+    fn launchd_backend_name() {
+        let backend = LaunchdBackend::new();
+        assert_eq!(InitBackend::name(&backend), "launchd");
+    }
+
+    #[test]
+    fn oneshot_no_run_at_load() {
+        let mut spec = test_spec();
+        spec.service_type = ServiceType::Oneshot;
+        let dict = spec_to_plist(&spec);
+        assert!(
+            dict.get("RunAtLoad").is_none(),
+            "oneshot should NOT set RunAtLoad (only Simple/Notify/Forking do)"
+        );
+    }
+
+    #[test]
+    fn forking_run_at_load() {
+        let mut spec = test_spec();
+        spec.service_type = ServiceType::Forking;
+        let dict = spec_to_plist(&spec);
+        assert_eq!(
+            dict.get("RunAtLoad").and_then(|v| v.as_boolean()),
+            Some(true),
+            "forking should RunAtLoad"
+        );
+    }
+
+    #[test]
+    fn config_emitter_extension_is_plist() {
+        let backend = LaunchdBackend::new();
+        assert_eq!(ConfigEmitter::extension(&backend), "plist");
+        assert_eq!(ConfigEmitter::name(&backend), "launchd");
+    }
 }
