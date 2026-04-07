@@ -354,4 +354,72 @@ mod tests {
         let parsed: ServiceState = serde_json::from_str("\"degraded\"").expect("parse");
         assert_eq!(parsed, ServiceState::Degraded);
     }
+
+    #[test]
+    fn all_service_phases_roundtrip() {
+        let phases = [
+            ServicePhase::Pending,
+            ServicePhase::Running,
+            ServicePhase::Succeeded,
+            ServicePhase::Failed,
+            ServicePhase::Unknown,
+        ];
+        for phase in phases {
+            let json = serde_json::to_string(&phase).expect("serialize");
+            let parsed: ServicePhase = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(parsed, phase);
+        }
+    }
+
+    #[test]
+    fn all_health_states_roundtrip() {
+        let states = [
+            HealthState::Unknown,
+            HealthState::Healthy,
+            HealthState::Unhealthy,
+            HealthState::Degraded,
+        ];
+        for state in states {
+            let json = serde_json::to_string(&state).expect("serialize");
+            let parsed: HealthState = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn service_status_yaml_roundtrip() {
+        let status = ServiceStatus::new("yaml-test", ServiceState::Running, "native")
+            .with_pid(999);
+        let yaml = serde_yaml_ng::to_string(&status).expect("serialize");
+        let parsed: ServiceStatus = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+        assert_eq!(parsed.name, "yaml-test");
+        assert_eq!(parsed.state, ServiceState::Running);
+        assert_eq!(parsed.pid, Some(999));
+        assert_eq!(parsed.backend, "native");
+    }
+
+    #[test]
+    fn service_status_with_exit_code() {
+        let json = r#"{
+            "name": "failed-svc",
+            "state": "failed",
+            "exit_code": 137,
+            "backend": "systemd"
+        }"#;
+        let status: ServiceStatus = serde_json::from_str(json).expect("parse");
+        assert_eq!(status.exit_code, Some(137));
+        assert_eq!(status.state, ServiceState::Failed);
+    }
+
+    #[test]
+    fn service_status_cpu_usage_field() {
+        let json = r#"{
+            "name": "busy-svc",
+            "state": "running",
+            "backend": "native",
+            "cpu_usage_percent": 99.5
+        }"#;
+        let status: ServiceStatus = serde_json::from_str(json).expect("parse");
+        assert!((status.cpu_usage_percent.unwrap() - 99.5).abs() < f64::EPSILON);
+    }
 }

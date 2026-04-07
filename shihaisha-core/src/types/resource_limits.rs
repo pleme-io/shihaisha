@@ -395,4 +395,108 @@ nice: -5
         let parsed: NiceValue = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.value(), -5);
     }
+
+    #[test]
+    fn memory_size_overflow_error() {
+        let result = MemorySize::parse("999999999999T");
+        assert!(result.is_err(), "should fail on overflow");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("overflow"), "error: {err}");
+    }
+
+    #[test]
+    fn memory_size_deserialize_negative_i64_rejected() {
+        let result: std::result::Result<MemorySize, _> = serde_json::from_str("-100");
+        assert!(result.is_err(), "negative memory should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("negative"), "error: {err}");
+    }
+
+    #[test]
+    fn memory_size_display() {
+        let m = MemorySize::parse("512M").unwrap();
+        assert_eq!(m.to_string(), "512M");
+
+        let m = MemorySize::from_bytes(1024);
+        assert_eq!(m.to_string(), "1024");
+    }
+
+    #[test]
+    fn weight_display() {
+        let w = Weight::new(100).unwrap();
+        assert_eq!(w.to_string(), "100");
+
+        let w = Weight::new(10000).unwrap();
+        assert_eq!(w.to_string(), "10000");
+    }
+
+    #[test]
+    fn nice_value_display() {
+        let n = NiceValue::new(-20).unwrap();
+        assert_eq!(n.to_string(), "-20");
+
+        let n = NiceValue::new(0).unwrap();
+        assert_eq!(n.to_string(), "0");
+
+        let n = NiceValue::new(19).unwrap();
+        assert_eq!(n.to_string(), "19");
+    }
+
+    #[test]
+    fn memory_size_from_bytes_preserves_value() {
+        let m = MemorySize::from_bytes(0);
+        assert_eq!(m.as_bytes(), 0);
+
+        let m = MemorySize::from_bytes(u64::MAX);
+        assert_eq!(m.as_bytes(), u64::MAX);
+    }
+
+    #[test]
+    fn memory_size_parse_plain_number() {
+        let m = MemorySize::parse("4096").unwrap();
+        assert_eq!(m.as_bytes(), 4096);
+    }
+
+    #[test]
+    fn memory_size_parse_whitespace_trimmed() {
+        let m = MemorySize::parse("  512M  ").unwrap();
+        assert_eq!(m.as_bytes(), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn weight_boundary_values() {
+        assert!(Weight::new(1).is_ok());
+        assert!(Weight::new(10000).is_ok());
+        assert!(Weight::new(0).is_err());
+        assert!(Weight::new(10001).is_err());
+        assert!(Weight::new(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn nice_boundary_values() {
+        assert!(NiceValue::new(-20).is_ok());
+        assert!(NiceValue::new(19).is_ok());
+        assert!(NiceValue::new(-21).is_err());
+        assert!(NiceValue::new(20).is_err());
+        assert!(NiceValue::new(i32::MAX).is_err());
+        assert!(NiceValue::new(i32::MIN).is_err());
+    }
+
+    #[test]
+    fn weight_deserialize_invalid_rejected() {
+        let result: std::result::Result<Weight, _> = serde_json::from_str("0");
+        assert!(result.is_err());
+
+        let result: std::result::Result<Weight, _> = serde_json::from_str("10001");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nice_deserialize_invalid_rejected() {
+        let result: std::result::Result<NiceValue, _> = serde_json::from_str("-21");
+        assert!(result.is_err());
+
+        let result: std::result::Result<NiceValue, _> = serde_json::from_str("20");
+        assert!(result.is_err());
+    }
 }

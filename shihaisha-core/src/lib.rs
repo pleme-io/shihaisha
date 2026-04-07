@@ -154,3 +154,85 @@ pub mod mock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::mock::{Call, MockBackend};
+    use crate::traits::init_backend::InitBackend;
+
+    #[tokio::test]
+    async fn mock_backend_records_all_call_types() {
+        let mock = MockBackend::new();
+        let spec = crate::ServiceSpec::new("test-svc", "/bin/echo");
+
+        mock.install(&spec).await.unwrap();
+        mock.start("test-svc").await.unwrap();
+        mock.stop("test-svc").await.unwrap();
+        mock.restart("test-svc").await.unwrap();
+        mock.reload("test-svc").await.unwrap();
+        mock.status("test-svc").await.unwrap();
+        mock.logs("test-svc", 50).await.unwrap();
+        mock.enable("test-svc").await.unwrap();
+        mock.disable("test-svc").await.unwrap();
+        mock.list().await.unwrap();
+        mock.daemon_reload().await.unwrap();
+        mock.uninstall("test-svc").await.unwrap();
+
+        let calls = mock.call_log().await;
+        assert_eq!(calls.len(), 12);
+        assert!(matches!(&calls[0], Call::Install(n) if n == "test-svc"));
+        assert!(matches!(&calls[1], Call::Start(n) if n == "test-svc"));
+        assert!(matches!(&calls[2], Call::Stop(n) if n == "test-svc"));
+        assert!(matches!(&calls[3], Call::Restart(n) if n == "test-svc"));
+        assert!(matches!(&calls[4], Call::Reload(n) if n == "test-svc"));
+        assert!(matches!(&calls[5], Call::Status(n) if n == "test-svc"));
+        assert!(matches!(&calls[6], Call::Logs(n, 50) if n == "test-svc"));
+        assert!(matches!(&calls[7], Call::Enable(n) if n == "test-svc"));
+        assert!(matches!(&calls[8], Call::Disable(n) if n == "test-svc"));
+        assert!(matches!(&calls[9], Call::List));
+        assert!(matches!(&calls[10], Call::DaemonReload));
+        assert!(matches!(&calls[11], Call::Uninstall(n) if n == "test-svc"));
+    }
+
+    #[test]
+    fn mock_backend_available_flag() {
+        let mock = MockBackend::new();
+        assert!(mock.available());
+        assert_eq!(mock.name(), "mock");
+
+        let unavailable = MockBackend {
+            calls: Default::default(),
+            available: false,
+        };
+        assert!(!unavailable.available());
+    }
+
+    #[test]
+    fn mock_backend_default_trait() {
+        let mock = MockBackend::default();
+        assert!(mock.available());
+    }
+
+    #[tokio::test]
+    async fn mock_status_returns_inactive() {
+        let mock = MockBackend::new();
+        let status = mock.status("my-svc").await.unwrap();
+        assert_eq!(status.name, "my-svc");
+        assert_eq!(status.state, crate::ServiceState::Inactive);
+        assert_eq!(status.backend, "mock");
+    }
+
+    #[tokio::test]
+    async fn mock_logs_returns_empty() {
+        let mock = MockBackend::new();
+        let logs = mock.logs("svc", 100).await.unwrap();
+        assert!(logs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_list_returns_empty() {
+        let mock = MockBackend::new();
+        let list = mock.list().await.unwrap();
+        assert!(list.is_empty());
+    }
+}
