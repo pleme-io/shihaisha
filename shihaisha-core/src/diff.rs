@@ -90,10 +90,8 @@ impl fmt::Display for Change {
 ///
 /// Returns an error if either spec cannot be serialised to JSON.
 pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Result<Vec<Change>> {
-    let old_val = serde_json::to_value(old)
-        .map_err(|e| Error::Serialization(format!("failed to serialise old spec: {e}")))?;
-    let new_val = serde_json::to_value(new)
-        .map_err(|e| Error::Serialization(format!("failed to serialise new spec: {e}")))?;
+    let old_val = serde_json::to_value(old)?;
+    let new_val = serde_json::to_value(new)?;
     let mut changes = Vec::new();
     diff_values("", &old_val, &new_val, &mut changes);
     changes.sort_by(|a, b| a.path().cmp(b.path()));
