@@ -43,6 +43,18 @@ pub enum Change {
     },
 }
 
+impl Change {
+    /// Returns the dot-delimited field path for this change.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Added { path, .. }
+            | Self::Removed { path, .. }
+            | Self::Modified { path, .. } => path,
+        }
+    }
+}
+
 impl fmt::Display for Change {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -84,20 +96,7 @@ pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Result<Vec<Change>> {
         .map_err(|e| Error::Serialization(format!("failed to serialise new spec: {e}")))?;
     let mut changes = Vec::new();
     diff_values("", &old_val, &new_val, &mut changes);
-    // Sort for deterministic output
-    changes.sort_by(|a, b| {
-        let path_a = match a {
-            Change::Added { path, .. }
-            | Change::Removed { path, .. }
-            | Change::Modified { path, .. } => path,
-        };
-        let path_b = match b {
-            Change::Added { path, .. }
-            | Change::Removed { path, .. }
-            | Change::Modified { path, .. } => path,
-        };
-        path_a.cmp(path_b)
-    });
+    changes.sort_by(|a, b| a.path().cmp(b.path()));
     Ok(changes)
 }
 
@@ -290,15 +289,7 @@ mod tests {
             changes.len()
         );
 
-        // Verify specific paths are present
-        let paths: Vec<&str> = changes
-            .iter()
-            .map(|c| match c {
-                Change::Added { path, .. }
-                | Change::Removed { path, .. }
-                | Change::Modified { path, .. } => path.as_str(),
-            })
-            .collect();
+        let paths: Vec<&str> = changes.iter().map(|c| c.path()).collect();
 
         assert!(paths.contains(&"description"));
         assert!(paths.contains(&"command"));
@@ -479,5 +470,27 @@ mod tests {
         };
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn change_path_accessor() {
+        let added = Change::Added {
+            path: "environment.KEY".to_owned(),
+            value: "val".to_owned(),
+        };
+        assert_eq!(added.path(), "environment.KEY");
+
+        let removed = Change::Removed {
+            path: "restart.strategy".to_owned(),
+            value: "old".to_owned(),
+        };
+        assert_eq!(removed.path(), "restart.strategy");
+
+        let modified = Change::Modified {
+            path: "command".to_owned(),
+            old: "a".to_owned(),
+            new: "b".to_owned(),
+        };
+        assert_eq!(modified.path(), "command");
     }
 }
