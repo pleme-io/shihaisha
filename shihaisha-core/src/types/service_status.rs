@@ -243,6 +243,34 @@ impl ServiceStatus {
         self.pid = Some(pid);
         self
     }
+
+    /// Set the exit code on this status (builder pattern).
+    #[must_use]
+    pub fn with_exit_code(mut self, code: i32) -> Self {
+        self.exit_code = Some(code);
+        self
+    }
+
+    /// Set the health state on this status (builder pattern).
+    #[must_use]
+    pub fn with_health(mut self, health: HealthState) -> Self {
+        self.health = health;
+        self
+    }
+
+    /// Set the uptime on this status (builder pattern).
+    #[must_use]
+    pub fn with_uptime_secs(mut self, secs: u64) -> Self {
+        self.uptime_secs = Some(secs);
+        self
+    }
+
+    /// Set the restart count on this status (builder pattern).
+    #[must_use]
+    pub fn with_restart_count(mut self, count: u32) -> Self {
+        self.restart_count = count;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -479,6 +507,49 @@ mod tests {
         }"#;
         let status: ServiceStatus = serde_json::from_str(json).expect("parse");
         assert!((status.cpu_usage_percent.unwrap() - 99.5).abs() < f64::EPSILON);
+    }
+
+    // --- Builder method tests ---
+
+    #[test]
+    fn with_exit_code_builder() {
+        let status = ServiceStatus::new("test", ServiceState::Failed, "native")
+            .with_exit_code(137);
+        assert_eq!(status.exit_code, Some(137));
+    }
+
+    #[test]
+    fn with_health_builder() {
+        let status = ServiceStatus::new("test", ServiceState::Running, "native")
+            .with_health(HealthState::Healthy);
+        assert_eq!(status.health, HealthState::Healthy);
+    }
+
+    #[test]
+    fn with_uptime_secs_builder() {
+        let status = ServiceStatus::new("test", ServiceState::Running, "native")
+            .with_uptime_secs(3600);
+        assert_eq!(status.uptime_secs, Some(3600));
+    }
+
+    #[test]
+    fn with_restart_count_builder() {
+        let status = ServiceStatus::new("test", ServiceState::Running, "native")
+            .with_restart_count(5);
+        assert_eq!(status.restart_count, 5);
+    }
+
+    #[test]
+    fn builder_chaining() {
+        let status = ServiceStatus::new("web", ServiceState::Running, "systemd")
+            .with_pid(1234)
+            .with_health(HealthState::Healthy)
+            .with_uptime_secs(7200)
+            .with_restart_count(2);
+        assert_eq!(status.pid, Some(1234));
+        assert_eq!(status.health, HealthState::Healthy);
+        assert_eq!(status.uptime_secs, Some(7200));
+        assert_eq!(status.restart_count, 2);
     }
 
     // --- FromStr round-trip tests ---
