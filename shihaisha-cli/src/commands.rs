@@ -466,4 +466,182 @@ mod tests {
             "valid directory should pass check: {result:?}",
         );
     }
+
+    #[tokio::test]
+    async fn install_invalid_yaml_returns_error() {
+        let mock = MockBackend::new();
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(b"not: valid: yaml: [[[").expect("write");
+
+        let cmd = Command::Install {
+            spec: tmp.path().to_path_buf(),
+        };
+        let result = execute(&cmd, &mock).await;
+        assert!(result.is_err(), "invalid YAML should fail");
+
+        let calls = mock.call_log().await;
+        assert!(calls.is_empty(), "should not call backend on parse error");
+    }
+
+    #[tokio::test]
+    async fn execute_check_is_noop_for_backend() {
+        let mock = MockBackend::new();
+        let cmd = Command::Check {
+            path: PathBuf::from("/tmp"),
+        };
+        execute(&cmd, &mock).await.expect("check in execute is no-op");
+        let calls = mock.call_log().await;
+        assert!(calls.is_empty(), "Check should not invoke backend");
+    }
+
+    #[tokio::test]
+    async fn execute_backends_is_noop_for_backend() {
+        let mock = MockBackend::new();
+        let cmd = Command::Backends;
+        execute(&cmd, &mock).await.expect("backends in execute is no-op");
+        let calls = mock.call_log().await;
+        assert!(calls.is_empty(), "Backends should not invoke backend");
+    }
+
+    #[tokio::test]
+    async fn execute_daemon_is_noop_for_backend() {
+        let mock = MockBackend::new();
+        let cmd = Command::Daemon;
+        execute(&cmd, &mock).await.expect("daemon in execute is no-op");
+        let calls = mock.call_log().await;
+        assert!(calls.is_empty(), "Daemon should not invoke backend");
+    }
+
+    #[tokio::test]
+    async fn run_daemon_returns_error() {
+        let cmd = Command::Daemon;
+        let result = run(cmd, None).await;
+        assert!(result.is_err(), "daemon mode should fail as unimplemented");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not yet implemented"),
+            "error should mention not implemented: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_missing_file_returns_error() {
+        let cmd = Command::Check {
+            path: PathBuf::from("/tmp/shihaisha-nonexistent-check-file.yaml"),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_err(), "missing file should fail");
+    }
+
+    #[tokio::test]
+    async fn check_invalid_yaml_file_returns_error() {
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(b"not: valid: yaml: [[[").expect("write");
+        let cmd = Command::Check {
+            path: tmp.path().to_path_buf(),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_err(), "invalid YAML should fail check");
+    }
+
+    #[tokio::test]
+    async fn check_directory_with_cycle_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let mut a = ServiceSpec::new("a", "/bin/a");
+        a.depends_on.after = vec!["b".to_owned()];
+        let mut b = ServiceSpec::new("b", "/bin/b");
+        b.depends_on.after = vec!["a".to_owned()];
+
+        tokio::fs::write(
+            dir.path().join("a.yaml"),
+            serde_yaml_ng::to_string(&a).unwrap(),
+        )
+        .await
+        .expect("write");
+        tokio::fs::write(
+            dir.path().join("b.yaml"),
+            serde_yaml_ng::to_string(&b).unwrap(),
+        )
+        .await
+        .expect("write");
+
+        let cmd = Command::Check {
+            path: dir.path().to_path_buf(),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_err(), "cyclic deps should fail");
+        assert!(
+            result.unwrap_err().to_string().contains("cycle"),
+            "error should mention cycle"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_directory_missing_reference_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let mut svc = ServiceSpec::new("svc", "/bin/svc");
+        svc.depends_on.after = vec!["nonexistent".to_owned()];
+
+        tokio::fs::write(
+            dir.path().join("svc.yaml"),
+            serde_yaml_ng::to_string(&svc).unwrap(),
+        )
+        .await
+        .expect("write");
+
+        let cmd = Command::Check {
+            path: dir.path().to_path_buf(),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_err(), "missing reference should fail");
+    }
+
+    #[tokio::test]
+    async fn check_empty_directory_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cmd = Command::Check {
+            path: dir.path().to_path_buf(),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_ok(), "empty dir should pass: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn check_directory_ignores_non_yaml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(dir.path().join("readme.txt"), "not yaml")
+            .await
+            .expect("write");
+        tokio::fs::write(dir.path().join("config.json"), "{}")
+            .await
+            .expect("write");
+
+        let spec = ServiceSpec::new("svc", "/bin/svc");
+        tokio::fs::write(
+            dir.path().join("svc.yaml"),
+            serde_yaml_ng::to_string(&spec).unwrap(),
+        )
+        .await
+        .expect("write");
+
+        let cmd = Command::Check {
+            path: dir.path().to_path_buf(),
+        };
+        let result = run(cmd, None).await;
+        assert!(result.is_ok(), "should ignore non-YAML files: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn logs_default_lines() {
+        let mock = MockBackend::new();
+        let cmd = Command::Logs {
+            name: "svc".to_owned(),
+            lines: 50,
+        };
+        execute(&cmd, &mock).await.expect("logs");
+        let calls = mock.call_log().await;
+        assert!(matches!(&calls[0], Call::Logs(_, 50)));
+    }
 }
