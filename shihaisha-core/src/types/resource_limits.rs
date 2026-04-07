@@ -161,6 +161,14 @@ impl fmt::Display for Weight {
     }
 }
 
+impl TryFrom<u64> for Weight {
+    type Error = Error;
+
+    fn try_from(v: u64) -> Result<Self> {
+        Self::new(v)
+    }
+}
+
 impl Serialize for Weight {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_u64(self.0)
@@ -208,6 +216,14 @@ impl NiceValue {
 impl fmt::Display for NiceValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<i32> for NiceValue {
+    type Error = Error;
+
+    fn try_from(v: i32) -> Result<Self> {
+        Self::new(v)
     }
 }
 
@@ -520,6 +536,24 @@ nice: -5
     #[test]
     fn memory_size_fromstr_invalid() {
         let result: Result<MemorySize> = "abc".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn weight_try_from_u64() {
+        let w: Weight = 500u64.try_into().expect("valid weight");
+        assert_eq!(w.value(), 500);
+
+        let result: Result<Weight> = 0u64.try_into();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nice_value_try_from_i32() {
+        let n: NiceValue = (-5i32).try_into().expect("valid nice");
+        assert_eq!(n.value(), -5);
+
+        let result: Result<NiceValue> = 20i32.try_into();
         assert!(result.is_err());
     }
 }
