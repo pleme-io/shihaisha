@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 /// Socket activation specification (maps to systemd `.socket` units /
 /// launchd `Sockets`).
@@ -28,6 +30,31 @@ pub enum SocketType {
     Datagram,
     /// Sequential packet socket.
     Sequential,
+}
+
+impl fmt::Display for SocketType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stream => write!(f, "stream"),
+            Self::Datagram => write!(f, "datagram"),
+            Self::Sequential => write!(f, "sequential"),
+        }
+    }
+}
+
+impl FromStr for SocketType {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "stream" => Ok(Self::Stream),
+            "datagram" => Ok(Self::Datagram),
+            "sequential" => Ok(Self::Sequential),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown socket type: {s}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -71,5 +98,27 @@ socket_type: datagram
     fn socket_type_serializes_lowercase() {
         let json = serde_json::to_string(&SocketType::Sequential).expect("serialize");
         assert_eq!(json, "\"sequential\"");
+    }
+
+    #[test]
+    fn socket_type_display() {
+        assert_eq!(SocketType::Stream.to_string(), "stream");
+        assert_eq!(SocketType::Datagram.to_string(), "datagram");
+        assert_eq!(SocketType::Sequential.to_string(), "sequential");
+    }
+
+    #[test]
+    fn socket_type_fromstr_roundtrip() {
+        for ty in [SocketType::Stream, SocketType::Datagram, SocketType::Sequential] {
+            let s = ty.to_string();
+            let parsed: SocketType = s.parse().expect("parse");
+            assert_eq!(parsed, ty);
+        }
+    }
+
+    #[test]
+    fn socket_type_fromstr_invalid() {
+        let result: crate::Result<SocketType> = "bogus".parse();
+        assert!(result.is_err());
     }
 }
