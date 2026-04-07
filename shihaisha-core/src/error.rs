@@ -223,4 +223,148 @@ mod tests {
             Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "x")),
         );
     }
+
+    #[test]
+    fn error_display_service_already_exists() {
+        let err = Error::ServiceAlreadyExists("myapp".to_owned());
+        assert_eq!(err.to_string(), "service already exists: myapp");
+    }
+
+    #[test]
+    fn error_display_backend_unavailable() {
+        let err = Error::BackendUnavailable("supervisord".to_owned());
+        assert_eq!(err.to_string(), "backend unavailable: supervisord");
+    }
+
+    #[test]
+    fn error_display_config_error() {
+        let err = Error::ConfigError("bad yaml".to_owned());
+        assert_eq!(err.to_string(), "config error: bad yaml");
+    }
+
+    #[test]
+    fn error_display_dependency_error() {
+        let err = Error::DependencyError("missing dep X".to_owned());
+        assert_eq!(err.to_string(), "dependency error: missing dep X");
+    }
+
+    #[test]
+    fn error_display_health_check_failed() {
+        let err = Error::HealthCheckFailed("tcp timeout".to_owned());
+        assert_eq!(err.to_string(), "health check failed: tcp timeout");
+    }
+
+    #[test]
+    fn error_display_io() {
+        let err = Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        assert!(err.to_string().starts_with("io error:"));
+        assert!(err.to_string().contains("gone"));
+    }
+
+    #[test]
+    fn error_display_serialization() {
+        let err = Error::Serialization("bad json".to_owned());
+        assert_eq!(err.to_string(), "serialization error: bad json");
+    }
+
+    #[test]
+    fn is_retryable_exhaustive_false_cases() {
+        assert!(!Error::ServiceAlreadyExists("x".to_owned()).is_retryable());
+        assert!(!Error::BackendUnavailable("x".to_owned()).is_retryable());
+        assert!(!Error::DependencyError("x".to_owned()).is_retryable());
+        assert!(!Error::HealthCheckFailed("x".to_owned()).is_retryable());
+        assert!(!Error::Serialization("x".to_owned()).is_retryable());
+    }
+
+    #[test]
+    fn partial_eq_same_payload_all_string_variants() {
+        let pairs: Vec<(Error, Error)> = vec![
+            (
+                Error::ServiceAlreadyExists("a".to_owned()),
+                Error::ServiceAlreadyExists("a".to_owned()),
+            ),
+            (
+                Error::BackendUnavailable("b".to_owned()),
+                Error::BackendUnavailable("b".to_owned()),
+            ),
+            (
+                Error::DependencyError("c".to_owned()),
+                Error::DependencyError("c".to_owned()),
+            ),
+            (
+                Error::HealthCheckFailed("d".to_owned()),
+                Error::HealthCheckFailed("d".to_owned()),
+            ),
+            (
+                Error::Serialization("e".to_owned()),
+                Error::Serialization("e".to_owned()),
+            ),
+        ];
+        for (a, b) in &pairs {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn partial_eq_different_payload_not_equal() {
+        assert_ne!(
+            Error::ServiceAlreadyExists("a".to_owned()),
+            Error::ServiceAlreadyExists("b".to_owned()),
+        );
+        assert_ne!(
+            Error::Serialization("x".to_owned()),
+            Error::Serialization("y".to_owned()),
+        );
+    }
+
+    #[test]
+    fn partial_eq_timeout_different_fields() {
+        assert_ne!(
+            Error::TimeoutError {
+                service: "a".to_owned(),
+                timeout_secs: 10,
+            },
+            Error::TimeoutError {
+                service: "a".to_owned(),
+                timeout_secs: 20,
+            },
+        );
+        assert_ne!(
+            Error::TimeoutError {
+                service: "a".to_owned(),
+                timeout_secs: 10,
+            },
+            Error::TimeoutError {
+                service: "b".to_owned(),
+                timeout_secs: 10,
+            },
+        );
+    }
+
+    #[test]
+    fn partial_eq_backend_error_different_fields() {
+        let base = Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "start".to_owned(),
+            detail: "fail".to_owned(),
+        };
+        let diff_backend = Error::BackendError {
+            backend: "launchd".to_owned(),
+            operation: "start".to_owned(),
+            detail: "fail".to_owned(),
+        };
+        let diff_op = Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "stop".to_owned(),
+            detail: "fail".to_owned(),
+        };
+        let diff_detail = Error::BackendError {
+            backend: "systemd".to_owned(),
+            operation: "start".to_owned(),
+            detail: "other".to_owned(),
+        };
+        assert_ne!(base, diff_backend);
+        assert_ne!(base, diff_op);
+        assert_ne!(base, diff_detail);
+    }
 }
