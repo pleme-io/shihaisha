@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// Runtime status of a managed service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +101,44 @@ impl fmt::Display for ServicePhase {
     }
 }
 
+impl FromStr for ServicePhase {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown service phase: {s}"
+            ))),
+        }
+    }
+}
+
+impl FromStr for ServiceState {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "inactive" => Ok(Self::Inactive),
+            "starting" => Ok(Self::Starting),
+            "running" => Ok(Self::Running),
+            "degraded" => Ok(Self::Degraded),
+            "reloading" => Ok(Self::Reloading),
+            "stopping" => Ok(Self::Stopping),
+            "stopped" => Ok(Self::Stopped),
+            "failed" => Ok(Self::Failed),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown service state: {s}"
+            ))),
+        }
+    }
+}
+
 impl ServiceState {
     /// Map detailed state to high-level phase.
     #[must_use]
@@ -154,6 +193,22 @@ impl fmt::Display for HealthState {
             Self::Healthy => write!(f, "healthy"),
             Self::Unhealthy => write!(f, "unhealthy"),
             Self::Degraded => write!(f, "degraded"),
+        }
+    }
+}
+
+impl FromStr for HealthState {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "unknown" => Ok(Self::Unknown),
+            "healthy" => Ok(Self::Healthy),
+            "unhealthy" => Ok(Self::Unhealthy),
+            "degraded" => Ok(Self::Degraded),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown health state: {s}"
+            ))),
         }
     }
 }
@@ -424,5 +479,73 @@ mod tests {
         }"#;
         let status: ServiceStatus = serde_json::from_str(json).expect("parse");
         assert!((status.cpu_usage_percent.unwrap() - 99.5).abs() < f64::EPSILON);
+    }
+
+    // --- FromStr round-trip tests ---
+
+    #[test]
+    fn service_state_fromstr_roundtrip() {
+        for state in [
+            ServiceState::Inactive,
+            ServiceState::Starting,
+            ServiceState::Running,
+            ServiceState::Degraded,
+            ServiceState::Reloading,
+            ServiceState::Stopping,
+            ServiceState::Stopped,
+            ServiceState::Failed,
+            ServiceState::Unknown,
+        ] {
+            let s = state.to_string();
+            let parsed: ServiceState = s.parse().expect("parse");
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn service_state_fromstr_invalid() {
+        let result: crate::Result<ServiceState> = "bogus".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn service_phase_fromstr_roundtrip() {
+        for phase in [
+            ServicePhase::Pending,
+            ServicePhase::Running,
+            ServicePhase::Succeeded,
+            ServicePhase::Failed,
+            ServicePhase::Unknown,
+        ] {
+            let s = phase.to_string();
+            let parsed: ServicePhase = s.parse().expect("parse");
+            assert_eq!(parsed, phase);
+        }
+    }
+
+    #[test]
+    fn service_phase_fromstr_invalid() {
+        let result: crate::Result<ServicePhase> = "bogus".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn health_state_fromstr_roundtrip() {
+        for state in [
+            HealthState::Unknown,
+            HealthState::Healthy,
+            HealthState::Unhealthy,
+            HealthState::Degraded,
+        ] {
+            let s = state.to_string();
+            let parsed: HealthState = s.parse().expect("parse");
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn health_state_fromstr_invalid() {
+        let result: crate::Result<HealthState> = "bogus".parse();
+        assert!(result.is_err());
     }
 }

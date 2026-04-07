@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// Strategy for handling failures within a service group.
 ///
@@ -23,6 +24,21 @@ impl fmt::Display for GroupRestartStrategy {
             Self::OneForOne => write!(f, "one_for_one"),
             Self::OneForAll => write!(f, "one_for_all"),
             Self::RestForOne => write!(f, "rest_for_one"),
+        }
+    }
+}
+
+impl FromStr for GroupRestartStrategy {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "one_for_one" => Ok(Self::OneForOne),
+            "one_for_all" => Ok(Self::OneForAll),
+            "rest_for_one" => Ok(Self::RestForOne),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown group restart strategy: {s}"
+            ))),
         }
     }
 }
@@ -126,5 +142,24 @@ members:
         assert_eq!(group.strategy, GroupRestartStrategy::OneForOne);
         assert_eq!(group.max_intensity, 5);
         assert_eq!(group.intensity_period_secs, 60);
+    }
+
+    #[test]
+    fn group_restart_strategy_fromstr_roundtrip() {
+        for strategy in [
+            GroupRestartStrategy::OneForOne,
+            GroupRestartStrategy::OneForAll,
+            GroupRestartStrategy::RestForOne,
+        ] {
+            let s = strategy.to_string();
+            let parsed: GroupRestartStrategy = s.parse().expect("parse");
+            assert_eq!(parsed, strategy);
+        }
+    }
+
+    #[test]
+    fn group_restart_strategy_fromstr_invalid() {
+        let result: crate::Result<GroupRestartStrategy> = "bogus".parse();
+        assert!(result.is_err());
     }
 }

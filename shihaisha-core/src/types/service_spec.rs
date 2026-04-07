@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use super::backend_overrides::BackendOverrides;
 use super::health_check::HealthCheckSpec;
@@ -145,6 +146,24 @@ impl fmt::Display for ServiceType {
     }
 }
 
+impl FromStr for ServiceType {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "simple" => Ok(Self::Simple),
+            "oneshot" => Ok(Self::Oneshot),
+            "notify" => Ok(Self::Notify),
+            "forking" => Ok(Self::Forking),
+            "timer" => Ok(Self::Timer),
+            "socket" => Ok(Self::Socket),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown service type: {s}"
+            ))),
+        }
+    }
+}
+
 /// How and when to restart the service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestartPolicy {
@@ -211,6 +230,22 @@ impl fmt::Display for RestartStrategy {
     }
 }
 
+impl FromStr for RestartStrategy {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "always" => Ok(Self::Always),
+            "on-failure" => Ok(Self::OnFailure),
+            "on-success" => Ok(Self::OnSuccess),
+            "never" => Ok(Self::Never),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown restart strategy: {s}"
+            ))),
+        }
+    }
+}
+
 /// Condition that must be met before a dependency is considered satisfied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -231,6 +266,21 @@ impl fmt::Display for DependencyCondition {
             Self::ServiceStarted => write!(f, "service_started"),
             Self::ServiceHealthy => write!(f, "service_healthy"),
             Self::ServiceCompletedSuccessfully => write!(f, "service_completed_successfully"),
+        }
+    }
+}
+
+impl FromStr for DependencyCondition {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "service_started" => Ok(Self::ServiceStarted),
+            "service_healthy" => Ok(Self::ServiceHealthy),
+            "service_completed_successfully" => Ok(Self::ServiceCompletedSuccessfully),
+            _ => Err(crate::Error::ConfigError(format!(
+                "unknown dependency condition: {s}"
+            ))),
         }
     }
 }
@@ -728,5 +778,69 @@ depends_on:
         let parsed: ServiceSpec = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert_eq!(parsed.depends_on.stop_before, vec!["cache"]);
         assert_eq!(parsed.depends_on.stop_after, vec!["database"]);
+    }
+
+    // --- FromStr round-trip tests ---
+
+    #[test]
+    fn service_type_fromstr_roundtrip() {
+        for ty in [
+            ServiceType::Simple,
+            ServiceType::Oneshot,
+            ServiceType::Notify,
+            ServiceType::Forking,
+            ServiceType::Timer,
+            ServiceType::Socket,
+        ] {
+            let s = ty.to_string();
+            let parsed: ServiceType = s.parse().expect("parse");
+            assert_eq!(parsed, ty);
+        }
+    }
+
+    #[test]
+    fn service_type_fromstr_invalid() {
+        let result: crate::Result<ServiceType> = "bogus".parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown service type"));
+    }
+
+    #[test]
+    fn restart_strategy_fromstr_roundtrip() {
+        for strategy in [
+            RestartStrategy::Always,
+            RestartStrategy::OnFailure,
+            RestartStrategy::OnSuccess,
+            RestartStrategy::Never,
+        ] {
+            let s = strategy.to_string();
+            let parsed: RestartStrategy = s.parse().expect("parse");
+            assert_eq!(parsed, strategy);
+        }
+    }
+
+    #[test]
+    fn restart_strategy_fromstr_invalid() {
+        let result: crate::Result<RestartStrategy> = "bogus".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dependency_condition_fromstr_roundtrip() {
+        for cond in [
+            DependencyCondition::ServiceStarted,
+            DependencyCondition::ServiceHealthy,
+            DependencyCondition::ServiceCompletedSuccessfully,
+        ] {
+            let s = cond.to_string();
+            let parsed: DependencyCondition = s.parse().expect("parse");
+            assert_eq!(parsed, cond);
+        }
+    }
+
+    #[test]
+    fn dependency_condition_fromstr_invalid() {
+        let result: crate::Result<DependencyCondition> = "bogus".parse();
+        assert!(result.is_err());
     }
 }

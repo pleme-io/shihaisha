@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 use crate::error::{Error, Result};
 
@@ -75,6 +76,14 @@ impl MemorySize {
 impl fmt::Display for MemorySize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.display)
+    }
+}
+
+impl FromStr for MemorySize {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::parse(s)
     }
 }
 
@@ -497,6 +506,20 @@ nice: -5
         assert!(result.is_err());
 
         let result: std::result::Result<NiceValue, _> = serde_json::from_str("20");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn memory_size_fromstr_roundtrip() {
+        for input in ["512M", "2G", "1T", "1024K", "4096"] {
+            let m: MemorySize = input.parse().expect("parse");
+            assert_eq!(m.to_string(), input);
+        }
+    }
+
+    #[test]
+    fn memory_size_fromstr_invalid() {
+        let result: Result<MemorySize> = "abc".parse();
         assert!(result.is_err());
     }
 }
