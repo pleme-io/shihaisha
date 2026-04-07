@@ -4,9 +4,7 @@ use std::path::PathBuf;
 /// falling back to `/tmp` if unset.
 #[must_use]
 pub fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    std::env::var("HOME").map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from)
 }
 
 /// Check if the current process is running as root (UID 0).
@@ -17,8 +15,7 @@ pub fn is_root() -> bool {
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim() == "0")
-        .unwrap_or(false)
+        .is_some_and(|s| s.trim() == "0")
 }
 
 /// Get the current user's UID, defaulting to 501 (macOS first user).

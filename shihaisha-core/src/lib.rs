@@ -149,7 +149,7 @@ pub mod mock {
             self.available
         }
 
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "mock"
         }
     }

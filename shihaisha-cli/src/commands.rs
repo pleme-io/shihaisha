@@ -137,19 +137,14 @@ pub async fn execute(command: &Command, backend: &dyn InitBackend) -> Result<()>
             if services.is_empty() {
                 println!("No managed services");
             } else {
-                println!(
-                    "{:<30} {:<12} {:<8} {}",
-                    "NAME", "STATE", "PID", "UPTIME"
-                );
+                println!("{:<30} {:<12} {:<8} UPTIME", "NAME", "STATE", "PID");
                 for svc in &services {
                     let pid = svc
                         .pid
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "-".into());
+                        .map_or_else(|| "-".into(), |p| p.to_string());
                     let uptime = svc
                         .uptime_secs
-                        .map(|u| format!("{u}s"))
-                        .unwrap_or_else(|| "-".into());
+                        .map_or_else(|| "-".into(), |u| format!("{u}s"));
                     println!(
                         "{:<30} {:<12} {:<8} {}",
                         svc.name, svc.state, pid, uptime
@@ -170,7 +165,7 @@ pub async fn execute(command: &Command, backend: &dyn InitBackend) -> Result<()>
 }
 
 pub async fn run(command: Command, backend_name: Option<String>) -> Result<()> {
-    let registry = BackendRegistry::detect().await;
+    let registry = BackendRegistry::detect();
 
     // Commands that need the registry rather than a single backend,
     // or don't need a backend at all.

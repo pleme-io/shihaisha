@@ -4,6 +4,7 @@ use shihaisha_core::types::health_check::{HealthCheckResult, HealthCheckSpec};
 use shihaisha_core::Result;
 use std::path::Path;
 use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tracing::debug;
@@ -106,7 +107,7 @@ impl HealthChecker for DefaultHealthChecker {
         }
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "default"
     }
 }
@@ -124,21 +125,19 @@ async fn check_http(endpoint: &str) -> std::io::Result<bool> {
     // Send a minimal HTTP/1.1 HEAD request
     let host = host_port.split(':').next().unwrap_or(host_port);
     let request = format!("HEAD {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     stream.write_all(request.as_bytes()).await?;
 
-    // Read the response status line
     let mut buf = vec![0u8; 1024];
     let n = stream.read(&mut buf).await?;
     let response = String::from_utf8_lossy(&buf[..n]);
 
-    // Check for HTTP/1.x 2xx or 3xx status
-    if let Some(status_line) = response.lines().next() {
-        if let Some(code_str) = status_line.split_whitespace().nth(1) {
-            if let Ok(code) = code_str.parse::<u16>() {
-                return Ok((200..400).contains(&code));
-            }
-        }
+    if let Some(code) = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+    {
+        return Ok((200..400).contains(&code));
     }
 
     Ok(false)

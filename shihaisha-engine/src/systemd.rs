@@ -6,6 +6,7 @@ use shihaisha_core::{
     ServiceStatus, ServiceType,
 };
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// Systemd backend using `systemctl` and `journalctl` CLI commands.
@@ -79,11 +80,11 @@ impl ConfigEmitter for SystemdBackend {
         Ok(spec_to_unit(spec))
     }
 
-    fn extension(&self) -> &str {
+    fn extension(&self) -> &'static str {
         "service"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "systemd"
     }
 }
@@ -92,145 +93,138 @@ impl ConfigEmitter for SystemdBackend {
 #[must_use]
 pub fn spec_to_unit(spec: &ServiceSpec) -> String {
     let mut unit = String::new();
+    emit_unit_section(&mut unit, spec);
+    unit.push('\n');
+    emit_service_section(&mut unit, spec);
+    unit.push('\n');
+    unit.push_str("[Install]\nWantedBy=default.target\n");
+    unit
+}
 
-    // [Unit] section
+fn emit_unit_section(unit: &mut String, spec: &ServiceSpec) {
     unit.push_str("[Unit]\n");
-    unit.push_str(&format!("Description={}\n", spec.description));
+    let _ = writeln!(unit, "Description={}", spec.description);
     for dep in &spec.depends_on.after {
-        unit.push_str(&format!("After={dep}.service\n"));
+        let _ = writeln!(unit, "After={dep}.service");
     }
     for dep in &spec.depends_on.before {
-        unit.push_str(&format!("Before={dep}.service\n"));
+        let _ = writeln!(unit, "Before={dep}.service");
     }
     for dep in &spec.depends_on.requires {
-        unit.push_str(&format!("Requires={dep}.service\n"));
+        let _ = writeln!(unit, "Requires={dep}.service");
     }
     for dep in &spec.depends_on.wants {
-        unit.push_str(&format!("Wants={dep}.service\n"));
+        let _ = writeln!(unit, "Wants={dep}.service");
     }
     for dep in &spec.depends_on.conflicts {
-        unit.push_str(&format!("Conflicts={dep}.service\n"));
+        let _ = writeln!(unit, "Conflicts={dep}.service");
     }
-
-    // Apply Unit section overrides
-    if let Some(unit_overrides) = spec.overrides.systemd.get("Unit") {
-        for (k, v) in unit_overrides {
-            unit.push_str(&format!("{k}={v}\n"));
+    if let Some(overrides) = spec.overrides.systemd.get("Unit") {
+        for (k, v) in overrides {
+            let _ = writeln!(unit, "{k}={v}");
         }
     }
+}
 
-    unit.push('\n');
-
-    // [Service] section
+fn emit_service_section(unit: &mut String, spec: &ServiceSpec) {
     unit.push_str("[Service]\n");
-    unit.push_str(&format!(
-        "Type={}\n",
-        match spec.service_type {
-            ServiceType::Simple => "simple",
-            ServiceType::Oneshot => "oneshot",
-            ServiceType::Notify => "notify",
-            ServiceType::Forking => "forking",
-            ServiceType::Timer | ServiceType::Socket => "simple",
-        }
-    ));
 
-    let exec_start = if spec.args.is_empty() {
-        spec.command.clone()
-    } else {
-        format!("{} {}", spec.command, spec.args.join(" "))
+    let svc_type = match spec.service_type {
+        ServiceType::Simple | ServiceType::Timer | ServiceType::Socket => "simple",
+        ServiceType::Oneshot => "oneshot",
+        ServiceType::Notify => "notify",
+        ServiceType::Forking => "forking",
     };
-    unit.push_str(&format!("ExecStart={exec_start}\n"));
+    let _ = writeln!(unit, "Type={svc_type}");
 
-    unit.push_str(&format!(
-        "Restart={}\n",
-        match spec.restart.strategy {
-            RestartStrategy::Always => "always",
-            RestartStrategy::OnFailure => "on-failure",
-            RestartStrategy::OnSuccess => "on-success",
-            RestartStrategy::Never => "no",
-        }
-    ));
-    unit.push_str(&format!("RestartSec={}\n", spec.restart.delay_secs));
+    if spec.args.is_empty() {
+        let _ = writeln!(unit, "ExecStart={}", spec.command);
+    } else {
+        let _ = writeln!(unit, "ExecStart={} {}", spec.command, spec.args.join(" "));
+    }
+
+    let restart = match spec.restart.strategy {
+        RestartStrategy::Always => "always",
+        RestartStrategy::OnFailure => "on-failure",
+        RestartStrategy::OnSuccess => "on-success",
+        RestartStrategy::Never => "no",
+    };
+    let _ = writeln!(unit, "Restart={restart}");
+    let _ = writeln!(unit, "RestartSec={}", spec.restart.delay_secs);
 
     if let Some(ref wd) = spec.working_directory {
-        unit.push_str(&format!("WorkingDirectory={}\n", wd.display()));
+        let _ = writeln!(unit, "WorkingDirectory={}", wd.display());
     }
     if let Some(ref user) = spec.user {
-        unit.push_str(&format!("User={user}\n"));
+        let _ = writeln!(unit, "User={user}");
     }
     if let Some(ref group) = spec.group {
-        unit.push_str(&format!("Group={group}\n"));
+        let _ = writeln!(unit, "Group={group}");
     }
     for (k, v) in &spec.environment {
-        unit.push_str(&format!("Environment=\"{k}={v}\"\n"));
+        let _ = writeln!(unit, "Environment=\"{k}={v}\"");
     }
 
-    // Logging
-    match &spec.logging.stdout {
-        LogTarget::Journal => {}
-        LogTarget::File(path) => {
-            unit.push_str(&format!("StandardOutput=file:{}\n", path.display()));
-        }
-        LogTarget::Null => unit.push_str("StandardOutput=null\n"),
-        LogTarget::Inherit => unit.push_str("StandardOutput=inherit\n"),
-    }
-    match &spec.logging.stderr {
-        LogTarget::Journal => {}
-        LogTarget::File(path) => {
-            unit.push_str(&format!("StandardError=file:{}\n", path.display()));
-        }
-        LogTarget::Null => unit.push_str("StandardError=null\n"),
-        LogTarget::Inherit => unit.push_str("StandardError=inherit\n"),
-    }
+    emit_log_target(unit, "StandardOutput", &spec.logging.stdout);
+    emit_log_target(unit, "StandardError", &spec.logging.stderr);
 
     if spec.notify {
         unit.push_str("NotifyAccess=main\n");
     }
     if spec.watchdog_sec > 0 {
-        unit.push_str(&format!("WatchdogSec={}\n", spec.watchdog_sec));
+        let _ = writeln!(unit, "WatchdogSec={}", spec.watchdog_sec);
     }
-    unit.push_str(&format!("TimeoutStartSec={}\n", spec.timeout_start_sec));
-    unit.push_str(&format!("TimeoutStopSec={}\n", spec.timeout_stop_sec));
+    let _ = writeln!(unit, "TimeoutStartSec={}", spec.timeout_start_sec);
+    let _ = writeln!(unit, "TimeoutStopSec={}", spec.timeout_stop_sec);
 
-    // Resource limits
     if let Some(ref res) = spec.resources {
-        if let Some(ref m) = res.memory_max {
-            unit.push_str(&format!("MemoryMax={m}\n"));
-        }
-        if let Some(ref m) = res.memory_high {
-            unit.push_str(&format!("MemoryHigh={m}\n"));
-        }
-        if let Some(w) = res.cpu_weight {
-            unit.push_str(&format!("CPUWeight={w}\n"));
-        }
-        if let Some(ref q) = res.cpu_quota {
-            unit.push_str(&format!("CPUQuota={q}\n"));
-        }
-        if let Some(t) = res.tasks_max {
-            unit.push_str(&format!("TasksMax={t}\n"));
-        }
-        if let Some(w) = res.io_weight {
-            unit.push_str(&format!("IOWeight={w}\n"));
-        }
-        if let Some(n) = res.nice {
-            unit.push_str(&format!("Nice={n}\n"));
-        }
+        emit_resource_limits(unit, res);
     }
 
-    // Apply Service section overrides
-    if let Some(svc_overrides) = spec.overrides.systemd.get("Service") {
-        for (k, v) in svc_overrides {
-            unit.push_str(&format!("{k}={v}\n"));
+    if let Some(overrides) = spec.overrides.systemd.get("Service") {
+        for (k, v) in overrides {
+            let _ = writeln!(unit, "{k}={v}");
         }
     }
+}
 
-    unit.push('\n');
+fn emit_log_target(unit: &mut String, directive: &str, target: &LogTarget) {
+    match target {
+        LogTarget::Journal => {}
+        LogTarget::File(path) => {
+            let _ = writeln!(unit, "{directive}=file:{}", path.display());
+        }
+        LogTarget::Null => {
+            let _ = writeln!(unit, "{directive}=null");
+        }
+        LogTarget::Inherit => {
+            let _ = writeln!(unit, "{directive}=inherit");
+        }
+    }
+}
 
-    // [Install] section
-    unit.push_str("[Install]\n");
-    unit.push_str("WantedBy=default.target\n");
-
-    unit
+fn emit_resource_limits(unit: &mut String, res: &shihaisha_core::ResourceLimits) {
+    if let Some(ref m) = res.memory_max {
+        let _ = writeln!(unit, "MemoryMax={m}");
+    }
+    if let Some(ref m) = res.memory_high {
+        let _ = writeln!(unit, "MemoryHigh={m}");
+    }
+    if let Some(w) = res.cpu_weight {
+        let _ = writeln!(unit, "CPUWeight={w}");
+    }
+    if let Some(ref q) = res.cpu_quota {
+        let _ = writeln!(unit, "CPUQuota={q}");
+    }
+    if let Some(t) = res.tasks_max {
+        let _ = writeln!(unit, "TasksMax={t}");
+    }
+    if let Some(w) = res.io_weight {
+        let _ = writeln!(unit, "IOWeight={w}");
+    }
+    if let Some(n) = res.nice {
+        let _ = writeln!(unit, "Nice={n}");
+    }
 }
 
 fn parse_systemctl_show(output: &str) -> HashMap<String, String> {
@@ -341,7 +335,7 @@ impl InitBackend for SystemdBackend {
 
         let props_map = parse_systemctl_show(&output);
 
-        let state = match props_map.get("ActiveState").map(|s| s.as_str()) {
+        let state = match props_map.get("ActiveState").map(String::as_str) {
             Some("active") => ServiceState::Running,
             Some("inactive") => ServiceState::Inactive,
             Some("failed") => ServiceState::Failed,
@@ -406,7 +400,7 @@ impl InitBackend for SystemdBackend {
 
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
-            Ok(text.lines().map(|l| l.to_owned()).collect())
+            Ok(text.lines().map(ToOwned::to_owned).collect())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(Error::BackendError {
@@ -480,7 +474,7 @@ impl InitBackend for SystemdBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "systemd"
     }
 }

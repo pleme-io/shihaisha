@@ -5,6 +5,7 @@ use shihaisha_core::{
     Error, HealthState, LogTarget, RestartStrategy, Result, ServiceSpec, ServiceState,
     ServiceStatus, ServiceType,
 };
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// Supervisord backend using `supervisorctl` CLI commands.
@@ -70,11 +71,11 @@ impl ConfigEmitter for SupervisordBackend {
         Ok(spec_to_conf(spec))
     }
 
-    fn extension(&self) -> &str {
+    fn extension(&self) -> &'static str {
         "conf"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "supervisord"
     }
 }
@@ -84,98 +85,72 @@ impl ConfigEmitter for SupervisordBackend {
 pub fn spec_to_conf(spec: &ServiceSpec) -> String {
     let mut conf = String::new();
 
-    conf.push_str(&format!("[program:{}]\n", spec.name));
+    let _ = writeln!(conf, "[program:{}]", spec.name);
 
-    // Command
-    let command = if spec.args.is_empty() {
-        spec.command.clone()
+    if spec.args.is_empty() {
+        let _ = writeln!(conf, "command={}", spec.command);
     } else {
-        format!("{} {}", spec.command, spec.args.join(" "))
+        let _ = writeln!(conf, "command={} {}", spec.command, spec.args.join(" "));
+    }
+
+    let autostart = if matches!(spec.service_type, ServiceType::Oneshot) {
+        "false"
+    } else {
+        "true"
     };
-    conf.push_str(&format!("command={command}\n"));
+    let _ = writeln!(conf, "autostart={autostart}");
 
-    // Auto-start: oneshot services should not auto-start
-    let autostart = !matches!(spec.service_type, ServiceType::Oneshot);
-    conf.push_str(&format!(
-        "autostart={}\n",
-        if autostart { "true" } else { "false" }
-    ));
-
-    // Auto-restart mapping
     let autorestart = match spec.restart.strategy {
         RestartStrategy::Always => "true",
         RestartStrategy::OnFailure => "unexpected",
         RestartStrategy::OnSuccess | RestartStrategy::Never => "false",
     };
-    conf.push_str(&format!("autorestart={autorestart}\n"));
+    let _ = writeln!(conf, "autorestart={autorestart}");
+    let _ = writeln!(conf, "startsecs={}", spec.restart.delay_secs);
 
-    // Start seconds (restart delay)
-    conf.push_str(&format!("startsecs={}\n", spec.restart.delay_secs));
-
-    // Max retries (default 3 when unset)
     let retries = if spec.restart.max_retries == 0 {
         3
     } else {
         spec.restart.max_retries
     };
-    conf.push_str(&format!("startretries={retries}\n"));
+    let _ = writeln!(conf, "startretries={retries}");
+    let _ = writeln!(conf, "stopwaitsecs={}", spec.timeout_stop_sec);
 
-    // Stop timeout
-    conf.push_str(&format!("stopwaitsecs={}\n", spec.timeout_stop_sec));
-
-    // Working directory
     if let Some(ref wd) = spec.working_directory {
-        conf.push_str(&format!("directory={}\n", wd.display()));
+        let _ = writeln!(conf, "directory={}", wd.display());
     }
-
-    // User
     if let Some(ref user) = spec.user {
-        conf.push_str(&format!("user={user}\n"));
+        let _ = writeln!(conf, "user={user}");
     }
 
-    // Environment variables
     if !spec.environment.is_empty() {
         let env_str: Vec<String> = spec
             .environment
             .iter()
             .map(|(k, v)| format!("{k}=\"{v}\""))
             .collect();
-        conf.push_str(&format!("environment={}\n", env_str.join(",")));
+        let _ = writeln!(conf, "environment={}", env_str.join(","));
     }
 
-    // Logging: stdout
     match &spec.logging.stdout {
         LogTarget::File(path) => {
-            conf.push_str(&format!("stdout_logfile={}\n", path.display()));
+            let _ = writeln!(conf, "stdout_logfile={}", path.display());
         }
-        LogTarget::Null => {
-            conf.push_str("stdout_logfile=/dev/null\n");
-        }
-        LogTarget::Journal | LogTarget::Inherit => {
-            conf.push_str("stdout_logfile=AUTO\n");
-        }
+        LogTarget::Null => conf.push_str("stdout_logfile=/dev/null\n"),
+        LogTarget::Journal | LogTarget::Inherit => conf.push_str("stdout_logfile=AUTO\n"),
     }
 
-    // Logging: stderr
     match &spec.logging.stderr {
         LogTarget::File(path) => {
-            conf.push_str(&format!("stderr_logfile={}\n", path.display()));
+            let _ = writeln!(conf, "stderr_logfile={}", path.display());
         }
-        LogTarget::Null => {
-            conf.push_str("stderr_logfile=/dev/null\n");
-        }
-        LogTarget::Journal | LogTarget::Inherit => {
-            conf.push_str("redirect_stderr=true\n");
-        }
+        LogTarget::Null => conf.push_str("stderr_logfile=/dev/null\n"),
+        LogTarget::Journal | LogTarget::Inherit => conf.push_str("redirect_stderr=true\n"),
     }
 
-    // Priority from nice value
-    if let Some(ref res) = spec.resources {
-        if let Some(nice) = res.nice {
-            // supervisord priority: lower = start first (opposite of nice)
-            let priority = 999 + nice.value();
-            conf.push_str(&format!("priority={priority}\n"));
-        }
+    if let Some(nice) = spec.resources.as_ref().and_then(|res| res.nice) {
+        let priority = 999 + nice.value();
+        let _ = writeln!(conf, "priority={priority}");
     }
 
     conf
@@ -305,7 +280,7 @@ impl InitBackend for SupervisordBackend {
         let output = self
             .supervisorctl(&["tail", &format!("-{lines}"), name])
             .await?;
-        Ok(output.lines().map(|l| l.to_owned()).collect())
+        Ok(output.lines().map(ToOwned::to_owned).collect())
     }
 
     async fn enable(&self, name: &str) -> Result<()> {
@@ -378,7 +353,7 @@ impl InitBackend for SupervisordBackend {
             .is_ok_and(|o| o.status.success())
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "supervisord"
     }
 }

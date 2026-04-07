@@ -90,11 +90,11 @@ impl ConfigEmitter for LaunchdBackend {
         dict_to_xml(&dict)
     }
 
-    fn extension(&self) -> &str {
+    fn extension(&self) -> &'static str {
         "plist"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "launchd"
     }
 }
@@ -317,7 +317,7 @@ fn apply_resource_limits(dict: &mut Dictionary, res: &ResourceLimits) {
     let mut hard_limits = Dictionary::new();
 
     if let Some(ref mem_max) = res.memory_max {
-        let bytes = mem_max.as_bytes() as i64;
+        let bytes = i64::try_from(mem_max.as_bytes()).unwrap_or(i64::MAX);
         hard_limits.insert(
             "MemoryLock".to_owned(),
             plist::Value::Integer(bytes.into()),
@@ -325,7 +325,7 @@ fn apply_resource_limits(dict: &mut Dictionary, res: &ResourceLimits) {
     }
 
     if let Some(ref mem_high) = res.memory_high {
-        let bytes = mem_high.as_bytes() as i64;
+        let bytes = i64::try_from(mem_high.as_bytes()).unwrap_or(i64::MAX);
         soft_limits.insert(
             "MemoryLock".to_owned(),
             plist::Value::Integer(bytes.into()),
@@ -366,10 +366,8 @@ fn json_value_to_plist(v: &serde_json::Value) -> Option<plist::Value> {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Some(plist::Value::Integer(i.into()))
-            } else if let Some(f) = n.as_f64() {
-                Some(plist::Value::Real(f))
             } else {
-                None
+                n.as_f64().map(plist::Value::Real)
             }
         }
         serde_json::Value::String(s) => Some(plist::Value::String(s.clone())),
@@ -586,22 +584,21 @@ impl InitBackend for LaunchdBackend {
                     detail: format!("failed to read plist: {e}"),
                 })?;
             if let Ok(plist::Value::Dictionary(dict)) = plist::from_bytes::<plist::Value>(&content)
+                && let Some(plist::Value::String(path)) = dict.get("StandardOutPath")
             {
-                if let Some(plist::Value::String(path)) = dict.get("StandardOutPath") {
-                    let log_path = PathBuf::from(path);
-                    if log_path.exists() {
-                        let text = tokio::fs::read_to_string(&log_path)
-                            .await
-                            .map_err(|e| Error::BackendError {
-                                backend: "launchd".to_owned(),
-                                operation: "logs".to_owned(),
-                                detail: format!("failed to read log file: {e}"),
-                            })?;
-                        let all_lines: Vec<String> =
-                            text.lines().map(|l| l.to_owned()).collect();
-                        let start = all_lines.len().saturating_sub(lines as usize);
-                        return Ok(all_lines[start..].to_vec());
-                    }
+                let log_path = PathBuf::from(path);
+                if log_path.exists() {
+                    let text = tokio::fs::read_to_string(&log_path)
+                        .await
+                        .map_err(|e| Error::BackendError {
+                            backend: "launchd".to_owned(),
+                            operation: "logs".to_owned(),
+                            detail: format!("failed to read log file: {e}"),
+                        })?;
+                    let all_lines: Vec<String> =
+                        text.lines().map(ToOwned::to_owned).collect();
+                    let start = all_lines.len().saturating_sub(lines as usize);
+                    return Ok(all_lines[start..].to_vec());
                 }
             }
         }
@@ -627,7 +624,7 @@ impl InitBackend for LaunchdBackend {
 
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
-            let all_lines: Vec<String> = text.lines().map(|l| l.to_owned()).collect();
+            let all_lines: Vec<String> = text.lines().map(ToOwned::to_owned).collect();
             let start = all_lines.len().saturating_sub(lines as usize);
             Ok(all_lines[start..].to_vec())
         } else {
@@ -705,7 +702,7 @@ impl InitBackend for LaunchdBackend {
                 .is_ok_and(|o| o.status.success())
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "launchd"
     }
 }

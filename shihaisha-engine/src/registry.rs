@@ -12,7 +12,8 @@ pub struct BackendRegistry {
 
 impl BackendRegistry {
     /// Auto-detect available backends on the current platform.
-    pub async fn detect() -> Self {
+    #[must_use]
+    pub fn detect() -> Self {
         let mut backends: HashMap<String, Box<dyn InitBackend>> = HashMap::new();
         let mut default = String::from("native");
 
@@ -75,19 +76,19 @@ impl BackendRegistry {
     /// Get a backend by name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&dyn InitBackend> {
-        self.backends.get(name).map(|b| b.as_ref())
+        self.backends.get(name).map(AsRef::as_ref)
     }
 
     /// Get the default backend for this platform.
     #[must_use]
     pub fn default_backend(&self) -> Option<&dyn InitBackend> {
-        self.backends.get(&self.default).map(|b| b.as_ref())
+        self.backends.get(&self.default).map(AsRef::as_ref)
     }
 
     /// List all available backend names.
     #[must_use]
     pub fn available_backends(&self) -> Vec<&str> {
-        self.backends.keys().map(|s| s.as_str()).collect()
+        self.backends.keys().map(String::as_str).collect()
     }
 
     /// Get the name of the default backend.
@@ -103,7 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn detect_has_at_least_one_backend() {
-        let registry = BackendRegistry::detect().await;
+        let registry = BackendRegistry::detect();
         assert!(
             !registry.available_backends().is_empty(),
             "should detect at least one backend"
@@ -112,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_backend_exists() {
-        let registry = BackendRegistry::detect().await;
+        let registry = BackendRegistry::detect();
         assert!(
             registry.default_backend().is_some(),
             "default backend should exist"
@@ -121,13 +122,13 @@ mod tests {
 
     #[tokio::test]
     async fn get_nonexistent_returns_none() {
-        let registry = BackendRegistry::detect().await;
+        let registry = BackendRegistry::detect();
         assert!(registry.get("nonexistent").is_none());
     }
 
     #[tokio::test]
     async fn default_name_matches_a_backend() {
-        let registry = BackendRegistry::detect().await;
+        let registry = BackendRegistry::detect();
         let name = registry.default_name();
         assert!(
             registry.get(name).is_some(),

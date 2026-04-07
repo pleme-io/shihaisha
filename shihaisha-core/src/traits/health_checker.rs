@@ -12,5 +12,5 @@ pub trait HealthChecker: Send + Sync {
     async fn check(&self, spec: &HealthCheckSpec) -> Result<HealthCheckResult>;
 
     /// Name of this health checker implementation.
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }

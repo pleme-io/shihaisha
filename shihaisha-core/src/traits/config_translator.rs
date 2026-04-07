@@ -10,10 +10,10 @@ pub trait ConfigEmitter: Send + Sync {
     fn emit(&self, spec: &ServiceSpec) -> Result<String>;
 
     /// File extension for the native format (e.g., `"service"`, `"plist"`, `"conf"`).
-    fn extension(&self) -> &str;
+    fn extension(&self) -> &'static str;
 
     /// Backend name (e.g., `"systemd"`, `"launchd"`, `"supervisord"`).
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }
 
 /// Parse a backend-native config format back into a `ServiceSpec`.
@@ -25,5 +25,5 @@ pub trait ConfigParser: Send + Sync {
     fn parse(&self, content: &str) -> Result<ServiceSpec>;
 
     /// Backend name (e.g., `"systemd"`, `"launchd"`, `"supervisord"`).
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }

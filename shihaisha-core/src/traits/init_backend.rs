@@ -49,5 +49,5 @@ pub trait InitBackend: Send + Sync {
     fn available(&self) -> bool;
 
     /// Backend name for display.
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }

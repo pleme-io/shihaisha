@@ -67,7 +67,7 @@ impl NativeBackend {
     }
 
     /// Spawn a process for a service and track it.
-    async fn spawn_process(&self, spec: &ServiceSpec) -> Result<Option<u32>> {
+    fn spawn_process(&self, spec: &ServiceSpec) -> Result<Option<u32>> {
         let mut cmd = tokio::process::Command::new(&spec.command);
         cmd.args(&spec.args);
 
@@ -85,21 +85,7 @@ impl NativeBackend {
                 cmd.stdout(std::process::Stdio::null());
             }
             LogTarget::File(path) => {
-                if let Some(parent) = path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        tracing::warn!(path = %parent.display(), error = %e, "failed to create stdout log dir, continuing");
-                    }
-                }
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|e| Error::BackendError {
-                        backend: "native".to_owned(),
-                        operation: "start".to_owned(),
-                        detail: format!("failed to open stdout log: {e}"),
-                    })?;
-                cmd.stdout(file);
+                cmd.stdout(open_log_file(path, "stdout")?);
             }
             LogTarget::Journal | LogTarget::Inherit => {
                 cmd.stdout(std::process::Stdio::inherit());
@@ -111,21 +97,7 @@ impl NativeBackend {
                 cmd.stderr(std::process::Stdio::null());
             }
             LogTarget::File(path) => {
-                if let Some(parent) = path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        tracing::warn!(path = %parent.display(), error = %e, "failed to create stderr log dir, continuing");
-                    }
-                }
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|e| Error::BackendError {
-                        backend: "native".to_owned(),
-                        operation: "start".to_owned(),
-                        detail: format!("failed to open stderr log: {e}"),
-                    })?;
-                cmd.stderr(file);
+                cmd.stderr(open_log_file(path, "stderr")?);
             }
             LogTarget::Journal | LogTarget::Inherit => {
                 cmd.stderr(std::process::Stdio::inherit());
@@ -140,96 +112,97 @@ impl NativeBackend {
 
         let pid = child.id();
 
-        // Spawn a background task to watch for process exit and handle restarts
-        let state = Arc::clone(&self.state);
-        let name = spec.name.clone();
-        let restart_strategy = spec.restart.strategy;
-        let restart_delay = spec.restart.delay_secs;
-        let max_retries = spec.restart.max_retries;
-        let spec_clone = spec.clone();
-
-        tokio::spawn(async move {
-            let mut child = child;
-            loop {
-                let exit_status = child.wait().await;
-
-                let exit_code = exit_status
-                    .ok()
-                    .and_then(|s| s.code())
-                    .unwrap_or(-1);
-
-                let mut state_lock = state.write().await;
-                let Some(svc_state) = state_lock.get_mut(&name) else {
-                    break;
-                };
-
-                svc_state.pid = None;
-                svc_state.exit_code = Some(exit_code);
-
-                let should_restart = match restart_strategy {
-                    RestartStrategy::Always => true,
-                    RestartStrategy::OnFailure => exit_code != 0,
-                    RestartStrategy::OnSuccess => exit_code == 0,
-                    RestartStrategy::Never => false,
-                };
-
-                let within_retries =
-                    max_retries == 0 || svc_state.restart_count < max_retries;
-
-                if should_restart && within_retries {
-                    svc_state.service_state = ServiceState::Starting;
-                    svc_state.restart_count += 1;
-
-                    // Drop the lock before sleeping
-                    drop(state_lock);
-
-                    tokio::time::sleep(std::time::Duration::from_secs(restart_delay)).await;
-
-                    // Re-spawn
-                    let mut cmd = tokio::process::Command::new(&spec_clone.command);
-                    cmd.args(&spec_clone.args);
-                    if let Some(ref wd) = spec_clone.working_directory {
-                        cmd.current_dir(wd);
-                    }
-                    for (k, v) in &spec_clone.environment {
-                        cmd.env(k, v);
-                    }
-                    cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
-
-                    match cmd.spawn() {
-                        Ok(new_child) => {
-                            let new_pid = new_child.id();
-                            let mut state_lock = state.write().await;
-                            if let Some(svc_state) = state_lock.get_mut(&name) {
-                                svc_state.pid = new_pid;
-                                svc_state.service_state = ServiceState::Running;
-                                svc_state.started_at = Some(chrono::Utc::now());
-                            }
-                            // Continue the loop to watch the new child
-                            child = new_child;
-                        }
-                        Err(_) => {
-                            let mut state_lock = state.write().await;
-                            if let Some(svc_state) = state_lock.get_mut(&name) {
-                                svc_state.service_state = ServiceState::Failed;
-                            }
-                            break;
-                        }
-                    }
-                } else {
-                    svc_state.service_state = if exit_code == 0 {
-                        ServiceState::Stopped
-                    } else {
-                        ServiceState::Failed
-                    };
-                    break;
-                }
-            }
-        });
+        spawn_process_watcher(
+            Arc::clone(&self.state),
+            child,
+            spec.clone(),
+        );
 
         Ok(pid)
     }
+}
+
+fn spawn_process_watcher(
+    state: Arc<tokio::sync::RwLock<HashMap<String, NativeServiceState>>>,
+    initial_child: tokio::process::Child,
+    spec: ServiceSpec,
+) {
+    let name = spec.name.clone();
+    let restart_strategy = spec.restart.strategy;
+    let restart_delay = spec.restart.delay_secs;
+    let max_retries = spec.restart.max_retries;
+
+    tokio::spawn(async move {
+        let mut child = initial_child;
+        loop {
+            let exit_code = child
+                .wait()
+                .await
+                .ok()
+                .and_then(|s| s.code())
+                .unwrap_or(-1);
+
+            let mut state_lock = state.write().await;
+            let Some(svc_state) = state_lock.get_mut(&name) else {
+                break;
+            };
+
+            svc_state.pid = None;
+            svc_state.exit_code = Some(exit_code);
+
+            let should_restart = match restart_strategy {
+                RestartStrategy::Always => true,
+                RestartStrategy::OnFailure => exit_code != 0,
+                RestartStrategy::OnSuccess => exit_code == 0,
+                RestartStrategy::Never => false,
+            };
+
+            let within_retries = max_retries == 0 || svc_state.restart_count < max_retries;
+
+            if should_restart && within_retries {
+                svc_state.service_state = ServiceState::Starting;
+                svc_state.restart_count += 1;
+                drop(state_lock);
+
+                tokio::time::sleep(std::time::Duration::from_secs(restart_delay)).await;
+
+                let mut cmd = tokio::process::Command::new(&spec.command);
+                cmd.args(&spec.args);
+                if let Some(ref wd) = spec.working_directory {
+                    cmd.current_dir(wd);
+                }
+                for (k, v) in &spec.environment {
+                    cmd.env(k, v);
+                }
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+
+                if let Ok(new_child) = cmd.spawn() {
+                    let new_pid = new_child.id();
+                    let mut state_lock = state.write().await;
+                    if let Some(svc_state) = state_lock.get_mut(&name) {
+                        svc_state.pid = new_pid;
+                        svc_state.service_state = ServiceState::Running;
+                        svc_state.started_at = Some(chrono::Utc::now());
+                    }
+                    child = new_child;
+                } else {
+                    let mut state_lock = state.write().await;
+                    if let Some(svc_state) = state_lock.get_mut(&name) {
+                        svc_state.service_state = ServiceState::Failed;
+                    }
+                    break;
+                }
+            } else {
+                svc_state.service_state = if exit_code == 0 {
+                    ServiceState::Stopped
+                } else {
+                    ServiceState::Failed
+                };
+                break;
+            }
+        }
+    });
 }
 
 impl Default for NativeBackend {
@@ -244,11 +217,11 @@ impl ConfigEmitter for NativeBackend {
             .map_err(|e| Error::ConfigError(format!("failed to serialize spec: {e}")))
     }
 
-    fn extension(&self) -> &str {
+    fn extension(&self) -> &'static str {
         "yaml"
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "native"
     }
 }
@@ -334,14 +307,14 @@ impl InitBackend for NativeBackend {
         // Check if already running
         {
             let state = self.state.read().await;
-            if let Some(svc) = state.get(name) {
-                if svc.service_state == ServiceState::Running && svc.pid.is_some() {
-                    return Ok(()); // Already running
-                }
+            if state.get(name).is_some_and(|svc| {
+                svc.service_state == ServiceState::Running && svc.pid.is_some()
+            }) {
+                return Ok(());
             }
         }
 
-        let pid = self.spawn_process(&spec).await?;
+        let pid = self.spawn_process(&spec)?;
 
         let mut state = self.state.write().await;
         let entry = state.entry(name.to_owned()).or_insert_with(|| NativeServiceState {
@@ -444,7 +417,7 @@ impl InitBackend for NativeBackend {
         if let Some(svc) = state.get(name) {
             let uptime_secs = svc.started_at.map(|started| {
                 let duration = chrono::Utc::now() - started;
-                duration.num_seconds().max(0) as u64
+                u64::try_from(duration.num_seconds().max(0)).unwrap_or(0)
             });
 
             Ok(ServiceStatus {
@@ -484,21 +457,19 @@ impl InitBackend for NativeBackend {
         // Try to find the log file from the spec
         let spec = self.load_spec(name).await.ok();
 
-        if let Some(spec) = spec {
-            if let LogTarget::File(ref path) = spec.logging.stdout {
-                if path.exists() {
-                    let text = tokio::fs::read_to_string(path)
-                        .await
-                        .map_err(|e| Error::BackendError {
-                            backend: "native".to_owned(),
-                            operation: "logs".to_owned(),
-                            detail: format!("failed to read log: {e}"),
-                        })?;
-                    let all_lines: Vec<String> = text.lines().map(|l| l.to_owned()).collect();
-                    let start = all_lines.len().saturating_sub(lines as usize);
-                    return Ok(all_lines[start..].to_vec());
-                }
-            }
+        if let Some(LogTarget::File(path)) = spec.as_ref().map(|s| &s.logging.stdout)
+            && path.exists()
+        {
+            let text = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|e| Error::BackendError {
+                    backend: "native".to_owned(),
+                    operation: "logs".to_owned(),
+                    detail: format!("failed to read log: {e}"),
+                })?;
+            let all_lines: Vec<String> = text.lines().map(String::from).collect();
+            let start = all_lines.len().saturating_sub(lines as usize);
+            return Ok(all_lines[start..].to_vec());
         }
 
         Ok(vec![format!(
@@ -532,7 +503,7 @@ impl InitBackend for NativeBackend {
         for (name, svc) in state.iter() {
             let uptime_secs = svc.started_at.map(|started| {
                 let duration = chrono::Utc::now() - started;
-                duration.num_seconds().max(0) as u64
+                u64::try_from(duration.num_seconds().max(0)).unwrap_or(0)
             });
 
             services.push(ServiceStatus {
@@ -570,24 +541,11 @@ impl InitBackend for NativeBackend {
             })?
             {
                 let path = entry.path();
-                if path.extension().is_some_and(|e| e == "yaml") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if !services.iter().any(|s| s.name == stem) {
-                            services.push(ServiceStatus {
-                                name: stem.to_owned(),
-                                state: ServiceState::Inactive,
-                                pid: None,
-                                exit_code: None,
-                                started_at: None,
-                                uptime_secs: None,
-                                restart_count: 0,
-                                health: HealthState::Unknown,
-                                backend: "native".to_owned(),
-                                memory_bytes: None,
-                                cpu_usage_percent: None,
-                            });
-                        }
-                    }
+                if path.extension().is_some_and(|e| e == "yaml")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && !services.iter().any(|s| s.name == stem)
+                {
+                    services.push(ServiceStatus::new(stem, ServiceState::Inactive, "native"));
                 }
             }
         }
@@ -605,9 +563,26 @@ impl InitBackend for NativeBackend {
         true
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "native"
     }
+}
+
+fn open_log_file(path: &std::path::Path, stream: &str) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(path = %parent.display(), error = %e, "failed to create {stream} log dir, continuing");
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| Error::BackendError {
+            backend: "native".to_owned(),
+            operation: "start".to_owned(),
+            detail: format!("failed to open {stream} log: {e}"),
+        })
 }
 
 /// Get the shihaisha config directory.
