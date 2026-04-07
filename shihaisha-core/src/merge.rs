@@ -613,4 +613,162 @@ mod tests {
         assert!(merged.depends_on.stop_after.contains(&"database".to_owned()));
         assert!(merged.depends_on.stop_after.contains(&"queue".to_owned()));
     }
+
+    #[test]
+    fn launchd_override_merge() {
+        let mut base = base_spec();
+        base.overrides.launchd.insert(
+            "LowPriorityIO".to_owned(),
+            serde_json::Value::Bool(true),
+        );
+        base.overrides.launchd.insert(
+            "ProcessType".to_owned(),
+            serde_json::Value::String("Background".to_owned()),
+        );
+
+        let mut overlay = overlay_spec();
+        overlay.overrides.launchd.insert(
+            "LowPriorityIO".to_owned(),
+            serde_json::Value::Bool(false),
+        );
+        overlay.overrides.launchd.insert(
+            "Nice".to_owned(),
+            serde_json::Value::Number(serde_json::Number::from(-5)),
+        );
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        assert_eq!(
+            merged.overrides.launchd.get("LowPriorityIO"),
+            Some(&serde_json::Value::Bool(false)),
+            "overlay wins on conflict"
+        );
+        assert_eq!(
+            merged.overrides.launchd.get("ProcessType"),
+            Some(&serde_json::Value::String("Background".to_owned())),
+            "base preserved"
+        );
+        assert_eq!(
+            merged.overrides.launchd.get("Nice"),
+            Some(&serde_json::Value::Number(serde_json::Number::from(-5))),
+            "overlay added"
+        );
+    }
+
+    #[test]
+    fn logging_spec_overlay_wins() {
+        use crate::types::logging::{LogTarget, LoggingSpec};
+
+        let base_logging = LoggingSpec {
+            stdout: LogTarget::Journal,
+            stderr: LogTarget::Null,
+        };
+        let overlay_logging = LoggingSpec {
+            stdout: LogTarget::Null,
+            stderr: LogTarget::Journal,
+        };
+        let merged = LoggingSpec::merge(&base_logging, &overlay_logging);
+        assert_eq!(merged.stdout, LogTarget::Null);
+        assert_eq!(merged.stderr, LogTarget::Journal);
+    }
+
+    #[test]
+    fn sockets_concatenate_without_dedup() {
+        use crate::types::socket_spec::{SocketSpec, SocketType};
+
+        let mut base = base_spec();
+        base.sockets = vec![SocketSpec {
+            listen: "127.0.0.1:8080".to_owned(),
+            socket_type: SocketType::Stream,
+            name: None,
+        }];
+
+        let mut overlay = overlay_spec();
+        overlay.sockets = vec![
+            SocketSpec {
+                listen: "127.0.0.1:8080".to_owned(),
+                socket_type: SocketType::Stream,
+                name: None,
+            },
+            SocketSpec {
+                listen: "127.0.0.1:9090".to_owned(),
+                socket_type: SocketType::Datagram,
+                name: None,
+            },
+        ];
+
+        let merged = ServiceSpec::merge(&base, &overlay);
+        assert_eq!(merged.sockets.len(), 3, "sockets concat without dedup");
+    }
+
+    #[test]
+    fn restart_policy_overlay_wins_entirely() {
+        let base = RestartPolicy {
+            strategy: RestartStrategy::OnFailure,
+            delay_secs: 5,
+            max_retries: 3,
+            reset_after_secs: 300,
+        };
+        let overlay = RestartPolicy {
+            strategy: RestartStrategy::Always,
+            delay_secs: 1,
+            max_retries: 10,
+            reset_after_secs: 60,
+        };
+        let merged = RestartPolicy::merge(&base, &overlay);
+        assert_eq!(merged.strategy, RestartStrategy::Always);
+        assert_eq!(merged.delay_secs, 1);
+        assert_eq!(merged.max_retries, 10);
+        assert_eq!(merged.reset_after_secs, 60);
+    }
+
+    #[test]
+    fn resource_limits_both_none() {
+        let mut base = base_spec();
+        base.resources = None;
+        let mut overlay = overlay_spec();
+        overlay.resources = None;
+        let merged = ServiceSpec::merge(&base, &overlay);
+        assert!(merged.resources.is_none());
+    }
+
+    #[test]
+    fn dependency_spec_merge_all_fields() {
+        use crate::types::service_spec::DependencyCondition;
+
+        let base = DependencySpec {
+            after: vec!["a".to_owned()],
+            before: vec!["b".to_owned()],
+            requires: vec!["c".to_owned()],
+            wants: vec!["d".to_owned()],
+            conflicts: vec!["e".to_owned()],
+            stop_before: vec!["f".to_owned()],
+            stop_after: vec!["g".to_owned()],
+            conditions: [("a".to_owned(), DependencyCondition::ServiceStarted)]
+                .into_iter()
+                .collect(),
+        };
+        let overlay = DependencySpec {
+            after: vec!["a".to_owned(), "x".to_owned()],
+            before: vec!["y".to_owned()],
+            requires: vec![],
+            wants: vec![],
+            conflicts: vec![],
+            stop_before: vec![],
+            stop_after: vec![],
+            conditions: [("a".to_owned(), DependencyCondition::ServiceHealthy)]
+                .into_iter()
+                .collect(),
+        };
+        let merged = DependencySpec::merge(&base, &overlay);
+        assert_eq!(merged.after.len(), 2); // a, x (deduped)
+        assert!(merged.after.contains(&"a".to_owned()));
+        assert!(merged.after.contains(&"x".to_owned()));
+        assert_eq!(merged.before.len(), 2); // b, y
+        assert_eq!(merged.requires, vec!["c".to_owned()]);
+        assert_eq!(
+            merged.conditions.get("a"),
+            Some(&DependencyCondition::ServiceHealthy),
+            "overlay wins on conditions"
+        );
+    }
 }
