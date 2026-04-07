@@ -48,11 +48,12 @@ pub struct ServiceStatus {
 }
 
 /// Process lifecycle state of a service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ServiceState {
     /// Not started / not loaded.
+    #[default]
     Inactive,
     /// Starting up.
     Starting,
@@ -507,6 +508,11 @@ mod tests {
         }"#;
         let status: ServiceStatus = serde_json::from_str(json).expect("parse");
         assert!((status.cpu_usage_percent.unwrap() - 99.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn service_state_default_is_inactive() {
+        assert_eq!(ServiceState::default(), ServiceState::Inactive);
     }
 
     // --- Builder method tests ---

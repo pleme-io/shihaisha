@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Logging configuration for a service.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +47,19 @@ impl fmt::Display for LogTarget {
             Self::File(path) => write!(f, "{}", path.display()),
             Self::Null => write!(f, "null"),
             Self::Inherit => write!(f, "inherit"),
+        }
+    }
+}
+
+impl FromStr for LogTarget {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> crate::Result<Self> {
+        match s {
+            "journal" => Ok(Self::Journal),
+            "null" => Ok(Self::Null),
+            "inherit" => Ok(Self::Inherit),
+            path => Ok(Self::File(PathBuf::from(path))),
         }
     }
 }
@@ -111,5 +125,18 @@ stderr: inherit
         let parsed: LoggingSpec = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert!(matches!(parsed.stdout, LogTarget::File(_)));
         assert!(matches!(parsed.stderr, LogTarget::Null));
+    }
+
+    #[test]
+    fn log_target_fromstr_keywords() {
+        assert_eq!("journal".parse::<LogTarget>().unwrap(), LogTarget::Journal);
+        assert_eq!("null".parse::<LogTarget>().unwrap(), LogTarget::Null);
+        assert_eq!("inherit".parse::<LogTarget>().unwrap(), LogTarget::Inherit);
+    }
+
+    #[test]
+    fn log_target_fromstr_file_path() {
+        let target: LogTarget = "/var/log/app.log".parse().unwrap();
+        assert_eq!(target, LogTarget::File(PathBuf::from("/var/log/app.log")));
     }
 }
