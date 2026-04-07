@@ -1938,7 +1938,19 @@ rec {
           {
             name = "shihaisha-engine";
             packageId = "shihaisha-engine";
-            features = [ "native" "launchd" ];
+            features = [ "native" ];
+          }
+          {
+            name = "shihaisha-engine";
+            packageId = "shihaisha-engine";
+            target = { target, features }: ("linux" == target."os" or null);
+            features = [ "systemd" ];
+          }
+          {
+            name = "shihaisha-engine";
+            packageId = "shihaisha-engine";
+            target = { target, features }: ("macos" == target."os" or null);
+            features = [ "launchd" ];
           }
           {
             name = "tokio";
@@ -1953,6 +1965,17 @@ rec {
             name = "tracing-subscriber";
             packageId = "tracing-subscriber";
             features = [ "env-filter" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "shihaisha-core";
+            packageId = "shihaisha-core";
+            features = [ "test-support" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 
@@ -1991,6 +2014,12 @@ rec {
             packageId = "thiserror";
           }
           {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "rt-multi-thread" "net" "sync" "macros" "signal" "process" "time" "io-util" "fs" ];
+          }
+          {
             name = "tracing";
             packageId = "tracing";
           }
@@ -2002,7 +2031,10 @@ rec {
             features = [ "rt-multi-thread" "net" "sync" "macros" "signal" "process" "time" "io-util" "fs" ];
           }
         ];
-
+        features = {
+          "test-support" = [ "dep:tokio" ];
+        };
+        resolvedDefaultFeatures = [ "default" "test-support" ];
       };
       "shihaisha-engine" = rec {
         crateName = "shihaisha-engine";
@@ -2057,6 +2089,11 @@ rec {
         ];
         devDependencies = [
           {
+            name = "shihaisha-core";
+            packageId = "shihaisha-core";
+            features = [ "test-support" ];
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -2069,7 +2106,7 @@ rec {
         features = {
           "default" = [ "native" ];
         };
-        resolvedDefaultFeatures = [ "default" "launchd" "native" "systemd" ];
+        resolvedDefaultFeatures = [ "default" "launchd" "native" "supervisord" "systemd" ];
       };
       "shlex" = rec {
         crateName = "shlex";
