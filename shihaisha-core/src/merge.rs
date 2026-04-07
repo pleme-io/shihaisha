@@ -55,12 +55,12 @@ fn merge_vec_dedup<T: Clone + Eq + Hash>(base: &[T], overlay: &[T]) -> Vec<T> {
     result
 }
 
-/// Merge two `HashMap<String, String>` maps: overlay keys win on conflict.
+/// Merge two `HashMap<K, V>` maps: overlay keys win on conflict.
 #[must_use]
-fn merge_string_map(
-    base: &HashMap<String, String>,
-    overlay: &HashMap<String, String>,
-) -> HashMap<String, String> {
+fn merge_hashmap<K: Clone + Eq + Hash, V: Clone>(
+    base: &HashMap<K, V>,
+    overlay: &HashMap<K, V>,
+) -> HashMap<K, V> {
     let mut result = base.clone();
     for (k, v) in overlay {
         result.insert(k.clone(), v.clone());
@@ -82,19 +82,6 @@ fn merge_nested_string_map(
         for (k, v) in overlay_entries {
             merged_section.insert(k.clone(), v.clone());
         }
-    }
-    result
-}
-
-/// Merge two `HashMap<String, serde_json::Value>` maps: overlay keys win.
-#[must_use]
-fn merge_json_map(
-    base: &HashMap<String, serde_json::Value>,
-    overlay: &HashMap<String, serde_json::Value>,
-) -> HashMap<String, serde_json::Value> {
-    let mut result = base.clone();
-    for (k, v) in overlay {
-        result.insert(k.clone(), v.clone());
     }
     result
 }
@@ -167,7 +154,7 @@ impl Merge for BackendOverrides {
     fn merge(base: &Self, overlay: &Self) -> Self {
         Self {
             systemd: merge_nested_string_map(&base.systemd, &overlay.systemd),
-            launchd: merge_json_map(&base.launchd, &overlay.launchd),
+            launchd: merge_hashmap(&base.launchd, &overlay.launchd),
         }
     }
 }
@@ -224,7 +211,7 @@ impl Merge for ServiceSpec {
             },
 
             // Map: merge by key
-            environment: merge_string_map(&base.environment, &overlay.environment),
+            environment: merge_hashmap(&base.environment, &overlay.environment),
 
             // Nested structs: delegate
             restart: RestartPolicy::merge(&base.restart, &overlay.restart),
