@@ -13,6 +13,28 @@ pub struct HealthCheckResult {
     pub message: Option<String>,
 }
 
+impl HealthCheckResult {
+    /// Create a healthy result with the given latency.
+    #[must_use]
+    pub fn healthy(latency: Duration) -> Self {
+        Self {
+            healthy: true,
+            latency,
+            message: None,
+        }
+    }
+
+    /// Create an unhealthy result with the given latency and diagnostic message.
+    #[must_use]
+    pub fn unhealthy(latency: Duration, message: impl Into<String>) -> Self {
+        Self {
+            healthy: false,
+            latency,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Health check specification — determines how to verify a service is healthy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -216,6 +238,22 @@ endpoint: http://localhost:3000/ready
         assert!(!result.healthy);
         assert_eq!(result.latency, Duration::from_secs(5));
         assert_eq!(result.message.as_deref(), Some("connection refused"));
+    }
+
+    #[test]
+    fn healthy_constructor() {
+        let result = HealthCheckResult::healthy(Duration::from_millis(10));
+        assert!(result.healthy);
+        assert_eq!(result.latency, Duration::from_millis(10));
+        assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn unhealthy_constructor() {
+        let result = HealthCheckResult::unhealthy(Duration::from_secs(1), "tcp timeout");
+        assert!(!result.healthy);
+        assert_eq!(result.latency, Duration::from_secs(1));
+        assert_eq!(result.message.as_deref(), Some("tcp timeout"));
     }
 
     #[test]

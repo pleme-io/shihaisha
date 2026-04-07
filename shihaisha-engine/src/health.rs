@@ -38,77 +38,51 @@ impl HealthChecker for DefaultHealthChecker {
             } => {
                 debug!("HTTP health check: {endpoint}");
                 let timeout = std::time::Duration::from_secs(*timeout_secs);
-                // Simple HTTP check using a TCP connect to the endpoint
-                // (avoids pulling in reqwest as a dependency)
-                let (healthy, message) =
-                    match tokio::time::timeout(timeout, check_http(endpoint)).await {
-                        Ok(Ok(true)) => (true, None),
-                        Ok(Ok(false)) => (false, Some("HTTP check returned non-2xx/3xx".to_owned())),
-                        Ok(Err(e)) => (false, Some(format!("HTTP check error: {e}"))),
-                        Err(_) => (false, Some("HTTP check timed out".to_owned())),
-                    };
-                Ok(HealthCheckResult {
-                    healthy,
-                    latency: start.elapsed(),
-                    message,
-                })
+                let result = match tokio::time::timeout(timeout, check_http(endpoint)).await {
+                    Ok(Ok(true)) => HealthCheckResult::healthy(start.elapsed()),
+                    Ok(Ok(false)) => HealthCheckResult::unhealthy(start.elapsed(), "HTTP check returned non-2xx/3xx"),
+                    Ok(Err(e)) => HealthCheckResult::unhealthy(start.elapsed(), format!("HTTP check error: {e}")),
+                    Err(_) => HealthCheckResult::unhealthy(start.elapsed(), "HTTP check timed out"),
+                };
+                Ok(result)
             }
             HealthCheckSpec::Tcp { address, .. } => {
                 debug!("TCP health check: {address}");
                 let timeout = std::time::Duration::from_secs(5);
-                let (healthy, message) =
-                    match tokio::time::timeout(timeout, TcpStream::connect(address)).await {
-                        Ok(Ok(_)) => (true, None),
-                        Ok(Err(e)) => (false, Some(format!("TCP connect failed: {e}"))),
-                        Err(_) => (false, Some("TCP connect timed out".to_owned())),
-                    };
-                Ok(HealthCheckResult {
-                    healthy,
-                    latency: start.elapsed(),
-                    message,
-                })
+                let result = match tokio::time::timeout(timeout, TcpStream::connect(address)).await {
+                    Ok(Ok(_)) => HealthCheckResult::healthy(start.elapsed()),
+                    Ok(Err(e)) => HealthCheckResult::unhealthy(start.elapsed(), format!("TCP connect failed: {e}")),
+                    Err(_) => HealthCheckResult::unhealthy(start.elapsed(), "TCP connect timed out"),
+                };
+                Ok(result)
             }
             HealthCheckSpec::Command {
                 command, args, ..
             } => {
                 debug!("command health check: {command}");
-                let output = Command::new(command).args(args).output().await;
-                let (healthy, message) = match output {
-                    Ok(out) if out.status.success() => (true, None),
-                    Ok(out) => (
-                        false,
-                        Some(format!(
+                let result = match Command::new(command).args(args).output().await {
+                    Ok(out) if out.status.success() => HealthCheckResult::healthy(start.elapsed()),
+                    Ok(out) => HealthCheckResult::unhealthy(
+                        start.elapsed(),
+                        format!(
                             "command exited with {}",
                             out.status.code().map_or("signal".to_owned(), |c| c.to_string())
-                        )),
+                        ),
                     ),
-                    Err(e) => (false, Some(format!("command failed: {e}"))),
+                    Err(e) => HealthCheckResult::unhealthy(start.elapsed(), format!("command failed: {e}")),
                 };
-                Ok(HealthCheckResult {
-                    healthy,
-                    latency: start.elapsed(),
-                    message,
-                })
+                Ok(result)
             }
             HealthCheckSpec::File { path, .. } => {
                 debug!("file health check: {}", path.display());
-                let exists = Path::new(path).exists();
-                let message = if exists {
-                    None
+                let result = if Path::new(path).exists() {
+                    HealthCheckResult::healthy(start.elapsed())
                 } else {
-                    Some(format!("file not found: {}", path.display()))
+                    HealthCheckResult::unhealthy(start.elapsed(), format!("file not found: {}", path.display()))
                 };
-                Ok(HealthCheckResult {
-                    healthy: exists,
-                    latency: start.elapsed(),
-                    message,
-                })
+                Ok(result)
             }
-            _ => Ok(HealthCheckResult {
-                healthy: false,
-                latency: start.elapsed(),
-                message: Some("unsupported health check type".to_owned()),
-            }),
+            _ => Ok(HealthCheckResult::unhealthy(start.elapsed(), "unsupported health check type")),
         }
     }
 
