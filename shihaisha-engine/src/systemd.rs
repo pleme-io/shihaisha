@@ -687,4 +687,109 @@ MemoryCurrent=104857600
         assert!(unit.contains("StandardOutput=file:/var/log/app/stdout.log"));
         assert!(unit.contains("StandardError=null"));
     }
+
+    #[test]
+    fn timer_and_socket_types_map_to_simple() {
+        for svc_type in [ServiceType::Timer, ServiceType::Socket] {
+            let mut spec = test_spec();
+            spec.service_type = svc_type;
+            let unit = spec_to_unit(&spec);
+            assert!(
+                unit.contains("Type=simple"),
+                "{svc_type:?} should map to simple"
+            );
+        }
+    }
+
+    #[test]
+    fn before_and_wants_in_unit() {
+        let mut spec = test_spec();
+        spec.depends_on.before = vec!["proxy".to_owned()];
+        spec.depends_on.wants = vec!["cache".to_owned()];
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("Before=proxy.service"), "unit:\n{unit}");
+        assert!(unit.contains("Wants=cache.service"), "unit:\n{unit}");
+    }
+
+    #[test]
+    fn logging_inherit_in_unit() {
+        let mut spec = test_spec();
+        spec.logging.stdout = LogTarget::Inherit;
+        spec.logging.stderr = LogTarget::Inherit;
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("StandardOutput=inherit"));
+        assert!(unit.contains("StandardError=inherit"));
+    }
+
+    #[test]
+    fn logging_journal_omits_standard_output() {
+        let spec = test_spec();
+        let unit = spec_to_unit(&spec);
+        assert!(
+            !unit.contains("StandardOutput="),
+            "journal logging should not add StandardOutput"
+        );
+        assert!(
+            !unit.contains("StandardError="),
+            "journal logging should not add StandardError"
+        );
+    }
+
+    #[test]
+    fn unit_overrides_applied() {
+        let mut spec = test_spec();
+        let mut unit_overrides = HashMap::new();
+        unit_overrides.insert("Documentation".to_owned(), "man:myapp(1)".to_owned());
+        spec.overrides.systemd.insert("Unit".to_owned(), unit_overrides);
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("Documentation=man:myapp(1)"));
+    }
+
+    #[test]
+    fn parse_systemctl_show_empty_input() {
+        let props = parse_systemctl_show("");
+        assert!(props.is_empty());
+    }
+
+    #[test]
+    fn parse_systemctl_show_malformed_lines() {
+        let output = "no-equals-sign\nAlso bad\nGood=value\n";
+        let props = parse_systemctl_show(output);
+        assert_eq!(props.len(), 1);
+        assert_eq!(props.get("Good").unwrap(), "value");
+    }
+
+    #[test]
+    fn no_resources_omits_directives() {
+        let mut spec = test_spec();
+        spec.resources = None;
+        let unit = spec_to_unit(&spec);
+        assert!(!unit.contains("MemoryMax="));
+        assert!(!unit.contains("CPUWeight="));
+        assert!(!unit.contains("TasksMax="));
+    }
+
+    #[test]
+    fn delay_secs_in_restart_sec() {
+        let mut spec = test_spec();
+        spec.restart.delay_secs = 42;
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("RestartSec=42"));
+    }
+
+    #[test]
+    fn custom_timeouts_in_unit() {
+        let mut spec = test_spec();
+        spec.timeout_start_sec = 120;
+        spec.timeout_stop_sec = 30;
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("TimeoutStartSec=120"));
+        assert!(unit.contains("TimeoutStopSec=30"));
+    }
+
+    #[test]
+    fn systemd_backend_name() {
+        let backend = SystemdBackend::new();
+        assert_eq!(InitBackend::name(&backend), "systemd");
+    }
 }
