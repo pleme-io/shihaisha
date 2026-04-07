@@ -7,27 +7,26 @@ pub fn home_dir() -> PathBuf {
     std::env::var("HOME").map_or_else(|_| PathBuf::from("/tmp"), PathBuf::from)
 }
 
-/// Check if the current process is running as root (UID 0).
-#[must_use]
-pub fn is_root() -> bool {
-    std::process::Command::new("id")
-        .args(["-u"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .is_some_and(|s| s.trim() == "0")
-}
-
-/// Get the current user's UID, defaulting to 501 (macOS first user).
-#[must_use]
-pub fn current_uid() -> u32 {
+/// Run `id -u` and return the parsed UID, or `None` on any failure.
+fn query_uid() -> Option<u32> {
     std::process::Command::new("id")
         .args(["-u"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(501)
+}
+
+/// Check if the current process is running as root (UID 0).
+#[must_use]
+pub fn is_root() -> bool {
+    query_uid() == Some(0)
+}
+
+/// Get the current user's UID, defaulting to 501 (macOS first user).
+#[must_use]
+pub fn current_uid() -> u32 {
+    query_uid().unwrap_or(501)
 }
 
 #[cfg(test)]
