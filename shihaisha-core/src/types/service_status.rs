@@ -103,10 +103,10 @@ impl ServiceState {
     #[must_use]
     pub fn phase(&self) -> ServicePhase {
         match self {
-            Self::Inactive | Self::Stopped => ServicePhase::Pending,
-            Self::Starting => ServicePhase::Pending,
-            Self::Running | Self::Degraded | Self::Reloading => ServicePhase::Running,
-            Self::Stopping => ServicePhase::Running,
+            Self::Inactive | Self::Stopped | Self::Starting => ServicePhase::Pending,
+            Self::Running | Self::Degraded | Self::Reloading | Self::Stopping => {
+                ServicePhase::Running
+            }
             Self::Failed => ServicePhase::Failed,
             Self::Unknown => ServicePhase::Unknown,
         }

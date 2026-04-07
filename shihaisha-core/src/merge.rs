@@ -38,8 +38,8 @@ pub trait Merge {
 
 /// Merge two `Option<T>` values: overlay `Some` wins, otherwise base.
 #[must_use]
-fn merge_option<T: Clone>(base: &Option<T>, overlay: &Option<T>) -> Option<T> {
-    overlay.as_ref().or(base.as_ref()).cloned()
+fn merge_option<T: Clone>(base: Option<&T>, overlay: Option<&T>) -> Option<T> {
+    overlay.or(base).cloned()
 }
 
 /// Merge two `Vec<T>` values: concatenate, deduplicate preserving order.
@@ -144,13 +144,13 @@ impl Merge for ResourceLimits {
     /// Option fields: overlay wins if `Some`, falls through otherwise.
     fn merge(base: &Self, overlay: &Self) -> Self {
         Self {
-            memory_max: merge_option(&base.memory_max, &overlay.memory_max),
-            memory_high: merge_option(&base.memory_high, &overlay.memory_high),
-            cpu_weight: merge_option(&base.cpu_weight, &overlay.cpu_weight),
-            cpu_quota: merge_option(&base.cpu_quota, &overlay.cpu_quota),
-            tasks_max: merge_option(&base.tasks_max, &overlay.tasks_max),
-            io_weight: merge_option(&base.io_weight, &overlay.io_weight),
-            nice: merge_option(&base.nice, &overlay.nice),
+            memory_max: merge_option(base.memory_max.as_ref(), overlay.memory_max.as_ref()),
+            memory_high: merge_option(base.memory_high.as_ref(), overlay.memory_high.as_ref()),
+            cpu_weight: merge_option(base.cpu_weight.as_ref(), overlay.cpu_weight.as_ref()),
+            cpu_quota: merge_option(base.cpu_quota.as_ref(), overlay.cpu_quota.as_ref()),
+            tasks_max: merge_option(base.tasks_max.as_ref(), overlay.tasks_max.as_ref()),
+            io_weight: merge_option(base.io_weight.as_ref(), overlay.io_weight.as_ref()),
+            nice: merge_option(base.nice.as_ref(), overlay.nice.as_ref()),
         }
     }
 }
@@ -206,12 +206,12 @@ impl Merge for ServiceSpec {
             },
 
             // Option: overlay wins if Some
-            working_directory: merge_option(&base.working_directory, &overlay.working_directory),
-            user: merge_option(&base.user, &overlay.user),
-            group: merge_option(&base.group, &overlay.group),
-            liveness: merge_option(&base.liveness, &overlay.liveness),
-            readiness: merge_option(&base.readiness, &overlay.readiness),
-            startup: merge_option(&base.startup, &overlay.startup),
+            working_directory: merge_option(base.working_directory.as_ref(), overlay.working_directory.as_ref()),
+            user: merge_option(base.user.as_ref(), overlay.user.as_ref()),
+            group: merge_option(base.group.as_ref(), overlay.group.as_ref()),
+            liveness: merge_option(base.liveness.as_ref(), overlay.liveness.as_ref()),
+            readiness: merge_option(base.readiness.as_ref(), overlay.readiness.as_ref()),
+            startup: merge_option(base.startup.as_ref(), overlay.startup.as_ref()),
 
             // Bool: overlay wins
             critical: overlay.critical,

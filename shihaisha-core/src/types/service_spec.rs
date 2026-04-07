@@ -121,7 +121,7 @@ pub enum ServiceType {
     Simple,
     /// Run-once task.
     Oneshot,
-    /// Long-running with sd_notify readiness.
+    /// Long-running with `sd_notify` readiness.
     Notify,
     /// Traditional daemon that forks.
     Forking,
@@ -316,7 +316,6 @@ impl ServiceSpec {
     }
 
     /// Validate the spec, returning an error if any fields have invalid values.
-    #[must_use]
     pub fn validate(&self) -> crate::Result<()> {
         if self.name.is_empty() {
             return Err(crate::Error::ConfigError(

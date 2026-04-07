@@ -45,7 +45,6 @@ use crate::{Error, Result};
 /// # Errors
 ///
 /// Returns `Error::DependencyError` if a circular dependency is detected.
-#[must_use]
 pub fn resolve_order(specs: &[ServiceSpec]) -> Result<Vec<String>> {
     // Build adjacency list and in-degree counts.
     let mut graph: HashMap<String, BTreeSet<String>> = HashMap::new();
@@ -150,7 +149,6 @@ pub fn resolve_order(specs: &[ServiceSpec]) -> Result<Vec<String>> {
 ///
 /// Returns `Error::DependencyError` if a reference to an unknown service
 /// name is found.
-#[must_use]
 pub fn validate_references(specs: &[ServiceSpec]) -> Result<()> {
     let names: HashSet<String> = specs.iter().map(|s| s.name.clone()).collect();
 

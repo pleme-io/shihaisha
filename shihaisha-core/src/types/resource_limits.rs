@@ -107,7 +107,7 @@ impl<'de> Deserialize<'de> for MemorySize {
                 if v < 0 {
                     return Err(E::custom("memory size cannot be negative"));
                 }
-                Ok(MemorySize::from_bytes(v as u64))
+                Ok(MemorySize::from_bytes(u64::try_from(v).map_err(|_| E::custom("memory size cannot be negative"))?))
             }
         }
 
