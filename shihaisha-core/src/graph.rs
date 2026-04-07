@@ -562,4 +562,170 @@ mod tests {
         assert!(order.contains(&"standalone".to_owned()));
         assert!(order.contains(&"orphan".to_owned()));
     }
+
+    #[test]
+    fn validate_missing_before_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                before: vec!["nonexistent".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("nonexistent"));
+    }
+
+    #[test]
+    fn validate_missing_requires_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                requires: vec!["missing-db".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-db"));
+    }
+
+    #[test]
+    fn validate_missing_wants_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                wants: vec!["missing-cache".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-cache"));
+    }
+
+    #[test]
+    fn validate_missing_conflicts_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                conflicts: vec!["old-svc".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("old-svc"));
+    }
+
+    #[test]
+    fn validate_missing_stop_before_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                stop_before: vec!["missing-stop".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-stop"));
+    }
+
+    #[test]
+    fn validate_missing_stop_after_reference() {
+        let specs = [spec_with_deps(
+            "svc",
+            DependencySpec {
+                stop_after: vec!["missing-dep".to_owned()],
+                ..DependencySpec::default()
+            },
+        )];
+        let result = validate_references(&specs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-dep"));
+    }
+
+    #[test]
+    fn resolve_order_before_pointing_at_unknown_is_silent() {
+        let specs = [
+            spec_with_deps(
+                "svc",
+                DependencySpec {
+                    before: vec!["nonexistent".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+        let order = resolve_order(&specs).expect("should not error");
+        assert_eq!(order, vec!["svc"]);
+    }
+
+    #[test]
+    fn resolve_order_requires_unknown_is_silent() {
+        let specs = [
+            spec_with_deps(
+                "svc",
+                DependencySpec {
+                    requires: vec!["unknown".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+        let order = resolve_order(&specs).expect("should not error");
+        assert_eq!(order, vec!["svc"]);
+    }
+
+    #[test]
+    fn validate_empty_set_succeeds() {
+        let specs: Vec<ServiceSpec> = vec![];
+        validate_references(&specs).expect("empty set is valid");
+    }
+
+    #[test]
+    fn validate_all_dependency_types_present() {
+        let specs = [
+            no_deps("db"),
+            no_deps("cache"),
+            no_deps("old-svc"),
+            no_deps("stop-target"),
+            spec_with_deps(
+                "svc",
+                DependencySpec {
+                    after: vec!["db".to_owned()],
+                    before: vec!["cache".to_owned()],
+                    requires: vec!["db".to_owned()],
+                    wants: vec!["cache".to_owned()],
+                    conflicts: vec!["old-svc".to_owned()],
+                    stop_before: vec!["cache".to_owned()],
+                    stop_after: vec!["stop-target".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+        validate_references(&specs).expect("all references exist");
+    }
+
+    #[test]
+    fn cycle_error_is_dependency_error() {
+        let specs = [
+            spec_with_deps(
+                "A",
+                DependencySpec {
+                    after: vec!["B".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+            spec_with_deps(
+                "B",
+                DependencySpec {
+                    after: vec!["A".to_owned()],
+                    ..DependencySpec::default()
+                },
+            ),
+        ];
+        let err = resolve_order(&specs).unwrap_err();
+        assert!(!err.is_retryable(), "cycle errors should not be retryable");
+    }
 }
