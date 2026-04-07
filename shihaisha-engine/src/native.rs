@@ -978,4 +978,176 @@ mod tests {
             backend.uninstall(name).await.expect("uninstall");
         }
     }
+
+    #[tokio::test]
+    async fn start_stop_status_lifecycle_with_sleep() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("sleep-svc", "sleep");
+        spec.args = vec!["60".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+
+        let status = backend.status("sleep-svc").await.expect("status before start");
+        assert_eq!(status.state, ServiceState::Inactive);
+
+        backend.start("sleep-svc").await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let status = backend.status("sleep-svc").await.expect("status after start");
+        assert_eq!(status.state, ServiceState::Running);
+        assert!(status.pid.is_some(), "should have a PID");
+        assert!(status.started_at.is_some(), "should have started_at");
+
+        backend.stop("sleep-svc").await.expect("stop");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let status = backend.status("sleep-svc").await.expect("status after stop");
+        assert!(
+            matches!(status.state, ServiceState::Stopped | ServiceState::Failed),
+            "expected Stopped or Failed, got {:?}",
+            status.state
+        );
+        assert!(status.pid.is_none(), "PID should be cleared after stop");
+
+        backend.uninstall("sleep-svc").await.expect("uninstall");
+    }
+
+    #[tokio::test]
+    async fn restart_calls_stop_then_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("restart-svc", "sleep");
+        spec.args = vec!["60".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("restart-svc").await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(
+            backend.status("restart-svc").await.expect("status").state,
+            ServiceState::Running,
+        );
+
+        backend.restart("restart-svc").await.expect("restart");
+
+        backend.stop("restart-svc").await.expect("stop");
+        backend.uninstall("restart-svc").await.expect("uninstall");
+    }
+
+    #[tokio::test]
+    async fn start_already_running_is_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("dup-start", "sleep");
+        spec.args = vec!["60".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("dup-start").await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let status_before = backend.status("dup-start").await.expect("status");
+        let pid_before = status_before.pid;
+
+        backend.start("dup-start").await.expect("start again should be ok");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let status_after = backend.status("dup-start").await.expect("status");
+        assert_eq!(status_after.pid, pid_before, "PID should not change on duplicate start");
+
+        backend.stop("dup-start").await.expect("stop");
+        backend.uninstall("dup-start").await.expect("uninstall");
+    }
+
+    #[tokio::test]
+    async fn reload_running_service() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        // Use sh -c with trap to ignore SIGHUP so the process stays alive
+        let mut spec = ServiceSpec::new("reload-svc", "sh");
+        spec.args = vec!["-c".to_owned(), "trap '' HUP; sleep 60".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("reload-svc").await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        backend.reload("reload-svc").await.expect("reload");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let status = backend.status("reload-svc").await.expect("status after reload");
+        assert_eq!(status.state, ServiceState::Running);
+
+        backend.stop("reload-svc").await.expect("stop");
+        backend.uninstall("reload-svc").await.expect("uninstall");
+    }
+
+    #[tokio::test]
+    async fn reload_stopped_service_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let spec = test_spec("reload-stopped");
+        backend.install(&spec).await.expect("install");
+
+        let result = backend.reload("reload-stopped").await;
+        assert!(result.is_err(), "reload should fail when service is not running");
+    }
+
+    #[tokio::test]
+    async fn status_uptime_is_positive_for_running() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("uptime-svc", "sleep");
+        spec.args = vec!["60".to_owned()];
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("uptime-svc").await.expect("start");
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let status = backend.status("uptime-svc").await.expect("status");
+        assert!(status.uptime_secs.is_some(), "uptime should be set for running service");
+
+        backend.stop("uptime-svc").await.expect("stop");
+        backend.uninstall("uptime-svc").await.expect("uninstall");
+    }
+
+    #[tokio::test]
+    async fn restart_never_strategy_stays_stopped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let mut spec = ServiceSpec::new("never-restart", "/bin/false");
+        spec.restart.strategy = RestartStrategy::Never;
+        spec.restart.delay_secs = 1;
+
+        backend.install(&spec).await.expect("install");
+        backend.start("never-restart").await.expect("start");
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let status = backend.status("never-restart").await.expect("status");
+        assert_eq!(
+            status.state,
+            ServiceState::Failed,
+            "never-restart service should be Failed after exit(1)"
+        );
+        assert_eq!(status.restart_count, 0, "should not have restarted");
+
+        backend.uninstall("never-restart").await.expect("uninstall");
+    }
 }

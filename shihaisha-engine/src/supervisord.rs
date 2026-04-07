@@ -740,4 +740,72 @@ mod tests {
             "resources without nice should not add priority"
         );
     }
+
+    #[test]
+    fn config_emitter_emit_matches_spec_to_conf() {
+        let backend = SupervisordBackend::new();
+        let spec = test_spec();
+        let via_trait = ConfigEmitter::emit(&backend, &spec).expect("emit");
+        let via_fn = spec_to_conf(&spec);
+        assert_eq!(via_trait, via_fn);
+    }
+
+    #[test]
+    fn conf_default_backend() {
+        let backend = SupervisordBackend::default();
+        assert_eq!(InitBackend::name(&backend), "supervisord");
+    }
+
+    #[test]
+    fn conf_command_with_multiple_args() {
+        let mut spec = test_spec();
+        spec.args = vec!["--config".to_owned(), "/etc/app.conf".to_owned()];
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("command=/usr/bin/test-app --config /etc/app.conf"));
+    }
+
+    #[test]
+    fn conf_command_no_args() {
+        let mut spec = test_spec();
+        spec.args.clear();
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("command=/usr/bin/test-app\n"));
+    }
+
+    #[test]
+    fn conf_custom_stop_timeout() {
+        let mut spec = test_spec();
+        spec.timeout_stop_sec = 120;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("stopwaitsecs=120"));
+    }
+
+    #[test]
+    fn conf_retries_default_when_zero() {
+        let mut spec = test_spec();
+        spec.restart.max_retries = 0;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("startretries=3"));
+    }
+
+    #[test]
+    fn conf_retries_custom_value() {
+        let mut spec = test_spec();
+        spec.restart.max_retries = 10;
+        let conf = spec_to_conf(&spec);
+        assert!(conf.contains("startretries=10"));
+    }
+
+    #[test]
+    fn parse_supervisord_state_all_variants() {
+        assert_eq!(parse_supervisord_state("RUNNING"), ServiceState::Running);
+        assert_eq!(parse_supervisord_state("STOPPED"), ServiceState::Stopped);
+        assert_eq!(parse_supervisord_state("STARTING"), ServiceState::Starting);
+        assert_eq!(parse_supervisord_state("BACKOFF"), ServiceState::Failed);
+        assert_eq!(parse_supervisord_state("FATAL"), ServiceState::Failed);
+        assert_eq!(parse_supervisord_state("STOPPING"), ServiceState::Unknown);
+        assert_eq!(parse_supervisord_state("EXITED"), ServiceState::Unknown);
+        assert_eq!(parse_supervisord_state("UNKNOWN"), ServiceState::Unknown);
+        assert_eq!(parse_supervisord_state("something-else"), ServiceState::Unknown);
+    }
 }

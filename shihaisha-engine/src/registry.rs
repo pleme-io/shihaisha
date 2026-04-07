@@ -177,4 +177,29 @@ mod tests {
         assert!(registry.get("native").is_none());
         assert!(registry.get("systemd").is_none());
     }
+
+    #[test]
+    fn detect_returns_native_as_default_on_linux() {
+        let registry = BackendRegistry::detect();
+        let backends = registry.available_backends();
+        assert!(backends.contains(&"native"), "native should always be available");
+    }
+
+    #[tokio::test]
+    async fn with_backend_lifecycle_through_mock() {
+        let mock = shihaisha_core::mock::MockBackend::new();
+        let registry = BackendRegistry::with_backend("mock", Box::new(mock));
+        let backend = registry.default_backend().unwrap();
+
+        let spec = shihaisha_core::ServiceSpec::new("test", "/bin/echo");
+        backend.install(&spec).await.unwrap();
+        backend.start("test").await.unwrap();
+
+        let status = backend.status("test").await.unwrap();
+        assert_eq!(status.name, "test");
+        assert_eq!(status.backend, "mock");
+
+        backend.stop("test").await.unwrap();
+        backend.uninstall("test").await.unwrap();
+    }
 }

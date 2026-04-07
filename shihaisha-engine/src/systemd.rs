@@ -786,4 +786,70 @@ MemoryCurrent=104857600
         let backend = SystemdBackend::new();
         assert_eq!(InitBackend::name(&backend), "systemd");
     }
+
+    #[test]
+    fn config_emitter_emit_produces_same_as_spec_to_unit() {
+        let backend = SystemdBackend::new();
+        let spec = test_spec();
+        let via_trait = ConfigEmitter::emit(&backend, &spec).expect("emit");
+        let via_fn = spec_to_unit(&spec);
+        assert_eq!(via_trait, via_fn);
+    }
+
+    #[test]
+    fn config_emitter_extension() {
+        let backend = SystemdBackend::new();
+        assert_eq!(backend.extension(), "service");
+    }
+
+    #[test]
+    fn default_trait() {
+        let backend = SystemdBackend::default();
+        assert_eq!(InitBackend::name(&backend), "systemd");
+    }
+
+    #[test]
+    fn unit_with_all_dependency_types() {
+        let mut spec = test_spec();
+        spec.depends_on.after = vec!["db".to_owned()];
+        spec.depends_on.before = vec!["proxy".to_owned()];
+        spec.depends_on.requires = vec!["db".to_owned()];
+        spec.depends_on.wants = vec!["cache".to_owned()];
+        spec.depends_on.conflicts = vec!["legacy".to_owned()];
+
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("After=db.service"));
+        assert!(unit.contains("Before=proxy.service"));
+        assert!(unit.contains("Requires=db.service"));
+        assert!(unit.contains("Wants=cache.service"));
+        assert!(unit.contains("Conflicts=legacy.service"));
+    }
+
+    #[test]
+    fn unit_with_partial_resources() {
+        let mut spec = test_spec();
+        spec.resources = Some(ResourceLimits {
+            memory_max: Some(MemorySize::parse("1G").unwrap()),
+            memory_high: None,
+            cpu_weight: None,
+            cpu_quota: None,
+            tasks_max: Some(512),
+            io_weight: None,
+            nice: None,
+        });
+
+        let unit = spec_to_unit(&spec);
+        assert!(unit.contains("MemoryMax=1G"));
+        assert!(unit.contains("TasksMax=512"));
+        assert!(!unit.contains("CPUWeight="));
+        assert!(!unit.contains("IOWeight="));
+        assert!(!unit.contains("Nice="));
+    }
+
+    #[test]
+    fn parse_systemctl_show_value_with_equals() {
+        let output = "Description=My App with = sign\n";
+        let props = parse_systemctl_show(output);
+        assert_eq!(props.get("Description").unwrap(), "My App with = sign");
+    }
 }
