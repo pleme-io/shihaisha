@@ -373,4 +373,111 @@ mod tests {
         let s = change.to_string();
         assert_eq!(s, "~ restart.strategy: \"on-failure\" \u{2192} \"always\"");
     }
+
+    #[test]
+    fn default_specs_produce_no_diff() {
+        let a = ServiceSpec::new("svc", "/bin/a");
+        let b = ServiceSpec::new("svc", "/bin/a");
+        let changes = diff(&a, &b).unwrap();
+        assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn type_change_detected_as_modified() {
+        let mut old = test_spec("test");
+        old.service_type = crate::types::service_spec::ServiceType::Simple;
+        let mut new = test_spec("test");
+        new.service_type = crate::types::service_spec::ServiceType::Oneshot;
+        let changes = diff(&old, &new).unwrap();
+        let svc_type_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Modified { path, .. } if path == "service_type"));
+        assert!(svc_type_change.is_some(), "should detect service_type change");
+    }
+
+    #[test]
+    fn diff_with_deeply_nested_overrides() {
+        let mut old = test_spec("test");
+        old.overrides.systemd.insert(
+            "Service".to_owned(),
+            [("LimitNOFILE".to_owned(), "65536".to_owned())].into_iter().collect(),
+        );
+        let mut new = test_spec("test");
+        new.overrides.systemd.insert(
+            "Service".to_owned(),
+            [("LimitNOFILE".to_owned(), "131072".to_owned())].into_iter().collect(),
+        );
+        let changes = diff(&old, &new).unwrap();
+        let override_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Modified { path, .. } if path.contains("LimitNOFILE")));
+        assert!(
+            override_change.is_some(),
+            "should detect deeply nested override change: {changes:?}"
+        );
+    }
+
+    #[test]
+    fn diff_bool_field_change() {
+        let mut old = test_spec("test");
+        old.critical = false;
+        let mut new = test_spec("test");
+        new.critical = true;
+        let changes = diff(&old, &new).unwrap();
+        let critical_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Modified { path, .. } if path == "critical"));
+        assert!(critical_change.is_some(), "should detect bool field change");
+    }
+
+    #[test]
+    fn diff_working_directory_added() {
+        let old = test_spec("test");
+        let mut new = test_spec("test");
+        new.working_directory = Some(std::path::PathBuf::from("/var/lib"));
+        let changes = diff(&old, &new).unwrap();
+        let wd_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Added { path, .. } | Change::Modified { path, .. } if path == "working_directory"));
+        assert!(wd_change.is_some(), "should detect working_directory addition");
+    }
+
+    #[test]
+    fn diff_working_directory_removed() {
+        let mut old = test_spec("test");
+        old.working_directory = Some(std::path::PathBuf::from("/var/lib"));
+        let new = test_spec("test");
+        let changes = diff(&old, &new).unwrap();
+        let wd_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Removed { path, .. } | Change::Modified { path, .. } if path == "working_directory"));
+        assert!(wd_change.is_some(), "should detect working_directory removal");
+    }
+
+    #[test]
+    fn diff_env_value_modified() {
+        let mut old = test_spec("test");
+        old.environment.insert("KEY".to_owned(), "old_val".to_owned());
+        let mut new = test_spec("test");
+        new.environment.insert("KEY".to_owned(), "new_val".to_owned());
+        let changes = diff(&old, &new).unwrap();
+        let env_change = changes
+            .iter()
+            .find(|c| matches!(c, Change::Modified { path, .. } if path == "environment.KEY"));
+        assert!(env_change.is_some(), "should detect env value modification");
+        if let Some(Change::Modified { old, new, .. }) = env_change {
+            assert!(old.contains("old_val"));
+            assert!(new.contains("new_val"));
+        }
+    }
+
+    #[test]
+    fn change_clone_and_eq() {
+        let a = Change::Added {
+            path: "x".to_owned(),
+            value: "1".to_owned(),
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
 }
