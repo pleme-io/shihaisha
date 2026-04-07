@@ -98,6 +98,15 @@ pub fn diff(old: &ServiceSpec, new: &ServiceSpec) -> Result<Vec<Change>> {
     Ok(changes)
 }
 
+/// Build a dot-delimited child path from parent and key.
+fn join_path(parent: &str, key: &str) -> String {
+    if parent.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{parent}.{key}")
+    }
+}
+
 /// Recursively diff two JSON values, accumulating changes.
 fn diff_values(
     path: &str,
@@ -109,54 +118,40 @@ fn diff_values(
 
     match (old, new) {
         (Value::Object(a), Value::Object(b)) => {
-            // Check keys in old
             for (k, v) in a {
-                let child_path = if path.is_empty() {
-                    k.clone()
-                } else {
-                    format!("{path}.{k}")
-                };
+                let child = join_path(path, k);
                 match b.get(k) {
-                    Some(bv) => diff_values(&child_path, v, bv, changes),
+                    Some(bv) => diff_values(&child, v, bv, changes),
                     None => changes.push(Change::Removed {
-                        path: child_path,
+                        path: child,
                         value: v.to_string(),
                     }),
                 }
             }
-            // Check keys only in new
             for (k, v) in b {
                 if !a.contains_key(k) {
-                    let child_path = if path.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{path}.{k}")
-                    };
                     changes.push(Change::Added {
-                        path: child_path,
+                        path: join_path(path, k),
                         value: v.to_string(),
                     });
                 }
             }
         }
-        (Value::Array(a), Value::Array(b)) => {
-            if a != b {
-                changes.push(Change::Modified {
-                    path: path.to_owned(),
-                    old: old.to_string(),
-                    new: new.to_string(),
-                });
-            }
+        (Value::Array(a), Value::Array(b)) if a != b => {
+            changes.push(Change::Modified {
+                path: path.to_owned(),
+                old: old.to_string(),
+                new: new.to_string(),
+            });
         }
-        _ => {
-            if old != new {
-                changes.push(Change::Modified {
-                    path: path.to_owned(),
-                    old: old.to_string(),
-                    new: new.to_string(),
-                });
-            }
+        _ if old != new => {
+            changes.push(Change::Modified {
+                path: path.to_owned(),
+                old: old.to_string(),
+                new: new.to_string(),
+            });
         }
+        _ => {}
     }
 }
 
