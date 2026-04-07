@@ -53,6 +53,14 @@ pub enum Error {
     /// A serialization or deserialization error occurred.
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    /// A YAML parsing or serialization error occurred.
+    #[error("yaml error: {0}")]
+    Yaml(#[from] serde_yaml_ng::Error),
+
+    /// A JSON parsing or serialization error occurred.
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Result type alias for shihaisha operations.
@@ -83,6 +91,9 @@ impl PartialEq for Error {
             | (Self::DependencyError(a), Self::DependencyError(b))
             | (Self::HealthCheckFailed(a), Self::HealthCheckFailed(b))
             | (Self::Serialization(a), Self::Serialization(b)) => a == b,
+            // Serde errors: compare by Display representation
+            (Self::Yaml(a), Self::Yaml(b)) => a.to_string() == b.to_string(),
+            (Self::Json(a), Self::Json(b)) => a.to_string() == b.to_string(),
             // Struct variants: compare all fields.
             (
                 Self::BackendError {
@@ -275,6 +286,12 @@ mod tests {
         assert!(!Error::DependencyError("x".to_owned()).is_retryable());
         assert!(!Error::HealthCheckFailed("x".to_owned()).is_retryable());
         assert!(!Error::Serialization("x".to_owned()).is_retryable());
+
+        let yaml_err: serde_yaml_ng::Error = serde_yaml_ng::from_str::<String>("{{bad").unwrap_err();
+        assert!(!Error::Yaml(yaml_err).is_retryable());
+
+        let json_err: serde_json::Error = serde_json::from_str::<String>("{{bad").unwrap_err();
+        assert!(!Error::Json(json_err).is_retryable());
     }
 
     #[test]
@@ -316,6 +333,22 @@ mod tests {
             Error::Serialization("x".to_owned()),
             Error::Serialization("y".to_owned()),
         );
+    }
+
+    #[test]
+    fn yaml_error_converts_via_from() {
+        let yaml_err: serde_yaml_ng::Error = serde_yaml_ng::from_str::<String>("{{bad").unwrap_err();
+        let err: Error = yaml_err.into();
+        assert!(matches!(err, Error::Yaml(_)));
+        assert!(err.to_string().starts_with("yaml error:"));
+    }
+
+    #[test]
+    fn json_error_converts_via_from() {
+        let json_err: serde_json::Error = serde_json::from_str::<String>("{{bad").unwrap_err();
+        let err: Error = json_err.into();
+        assert!(matches!(err, Error::Json(_)));
+        assert!(err.to_string().starts_with("json error:"));
     }
 
     #[test]
