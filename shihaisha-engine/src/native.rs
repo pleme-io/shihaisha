@@ -835,6 +835,104 @@ mod tests {
         backend.uninstall("fail-restart").await.expect("uninstall");
     }
 
+    #[test]
+    fn config_emitter_emit_produces_valid_yaml() {
+        let backend = NativeBackend::new();
+        let spec = test_spec("emit-test");
+        let yaml = ConfigEmitter::emit(&backend, &spec).expect("emit");
+        let parsed: ServiceSpec =
+            serde_yaml_ng::from_str(&yaml).expect("emitted YAML should parse");
+        assert_eq!(parsed.name, "emit-test");
+        assert_eq!(parsed.command, "/bin/echo");
+    }
+
+    #[test]
+    fn config_emitter_extension_is_yaml() {
+        let backend = NativeBackend::new();
+        assert_eq!(backend.extension(), "yaml");
+    }
+
+    #[tokio::test]
+    async fn logs_no_spec_returns_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+        let logs = backend.logs("nonexistent", 50).await.expect("logs");
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].contains("No log file configured"));
+    }
+
+    #[tokio::test]
+    async fn logs_with_file_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let log_file = dir.path().join("test.log");
+        tokio::fs::write(&log_file, "line1\nline2\nline3\nline4\nline5\n")
+            .await
+            .expect("write log");
+
+        let mut spec = test_spec("log-test");
+        spec.logging.stdout = LogTarget::File(log_file);
+        backend.install(&spec).await.expect("install");
+
+        let logs = backend.logs("log-test", 3).await.expect("logs");
+        assert_eq!(logs.len(), 3);
+        assert_eq!(logs[0], "line3");
+        assert_eq!(logs[1], "line4");
+        assert_eq!(logs[2], "line5");
+    }
+
+    #[tokio::test]
+    async fn logs_with_file_target_more_lines_than_available() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+
+        let log_file = dir.path().join("small.log");
+        tokio::fs::write(&log_file, "only-one\n")
+            .await
+            .expect("write log");
+
+        let mut spec = test_spec("small-log");
+        spec.logging.stdout = LogTarget::File(log_file);
+        backend.install(&spec).await.expect("install");
+
+        let logs = backend.logs("small-log", 100).await.expect("logs");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0], "only-one");
+    }
+
+    #[tokio::test]
+    async fn start_nonexistent_service_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+        let result = backend.start("no-such-service").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn stop_nonexistent_service_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+        let result = backend.stop("no-such-service").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn uninstall_nonexistent_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = NativeBackend::with_dir(dir.path().to_path_buf());
+        backend
+            .uninstall("no-such-service")
+            .await
+            .expect("uninstall nonexistent should succeed");
+    }
+
+    #[test]
+    fn default_trait_creates_backend() {
+        let backend = NativeBackend::default();
+        assert!(backend.available());
+    }
+
     // Phase 5b: Concurrent access test
     #[tokio::test]
     async fn concurrent_service_lifecycle() {

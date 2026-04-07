@@ -155,4 +155,25 @@ mod tests {
         let status = backend.status("test").await.unwrap();
         assert_eq!(status.backend, "mock");
     }
+
+    #[test]
+    fn empty_registry_default_name_is_empty() {
+        let registry = BackendRegistry::empty();
+        assert_eq!(registry.default_name(), "");
+    }
+
+    #[test]
+    fn empty_registry_get_returns_none() {
+        let registry = BackendRegistry::empty();
+        assert!(registry.get("native").is_none());
+        assert!(registry.get("").is_none());
+    }
+
+    #[test]
+    fn with_backend_get_wrong_name_returns_none() {
+        let mock = shihaisha_core::mock::MockBackend::new();
+        let registry = BackendRegistry::with_backend("mock", Box::new(mock));
+        assert!(registry.get("native").is_none());
+        assert!(registry.get("systemd").is_none());
+    }
 }
