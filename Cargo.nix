@@ -1893,7 +1893,7 @@ rec {
       };
       "shihaisha-cli" = rec {
         crateName = "shihaisha-cli";
-        version = "0.1.0";
+        version = "0.1.1";
         edition = "2024";
         crateBin = [
           {
@@ -1982,7 +1982,7 @@ rec {
       };
       "shihaisha-core" = rec {
         crateName = "shihaisha-core";
-        version = "0.1.0";
+        version = "0.1.1";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./shihaisha-core; };
         libName = "shihaisha_core";
@@ -2038,7 +2038,7 @@ rec {
       };
       "shihaisha-engine" = rec {
         crateName = "shihaisha-engine";
-        version = "0.1.0";
+        version = "0.1.1";
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./shihaisha-engine; };
         libName = "shihaisha_engine";

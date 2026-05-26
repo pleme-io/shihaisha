@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "shihaisha-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "shihaisha-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "shihaisha-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
